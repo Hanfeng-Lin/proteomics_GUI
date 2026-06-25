@@ -121,6 +121,11 @@ def build_volcano_params(v):
         label_topX_mid_fc=_opt_int(v["label_topX_mid_fc"]),
         max_label=_req_int(v["max_label"], 100),
         label_most_extreme=_opt_int(v["label_most_extreme"]),
+        title_fontsize=_req_float(v["title_fontsize"], 24),
+        axis_label_fontsize=_req_float(v["axis_label_fontsize"], 20),
+        tick_fontsize=_req_float(v["tick_fontsize"], 16),
+        legend_fontsize=_req_float(v["legend_fontsize"], 12),
+        gene_label_fontsize=_req_float(v["gene_label_fontsize"], 14),
     )
 
 
@@ -164,6 +169,11 @@ def build_bubble_params(v):
         invert_xy=bool(v["invert_xy"]),
         selected_genes=_genes(v["selected_genes"]),
         legend_num=legend_num,
+        title_fontsize=_req_float(v["title_fontsize"], 30),
+        axis_fontsize=_req_float(v["axis_fontsize"], 30),
+        colorbar_label_fontsize=_req_float(v["colorbar_label_fontsize"], 30),
+        colorbar_tick_fontsize=_req_float(v["colorbar_tick_fontsize"], 30),
+        legend_fontsize=_req_float(v["legend_fontsize"], 30),
     )
     return SAR, kwargs
 
@@ -465,9 +475,11 @@ class GroupPickerDialog(tk.Toplevel):
 
 class ScrollableFrame(ttk.Frame):
     """A vertically scrollable frame; put widgets in `.inner`."""
-    def __init__(self, parent, width=460, **kw):
+    def __init__(self, parent, width=460, height=480, **kw):
         super().__init__(parent, **kw)
-        self.canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0, width=width)
+        # A bounded canvas height keeps tall tab content from forcing the whole
+        # window taller (which would push the Log box off-screen) -- it scrolls.
+        self.canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0, width=width, height=height)
         vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
@@ -500,6 +512,7 @@ class VolcanoGUI(tk.Tk):
         self._sar_text = None
         self._plot_canvas = None
         self.output_dir = None   # dedicated outputs folder under the data folder
+        self._log_fh = None      # open file handle: <output_dir>/analysis_log.txt
 
         self.log_q = queue.Queue()
         self.result_q = queue.Queue()
@@ -527,12 +540,28 @@ class VolcanoGUI(tk.Tk):
                 self.log_text.insert("end", msg)
                 self.log_text.see("end")
                 self.log_text.configure(state="disabled")
+                if self._log_fh is not None:
+                    try:
+                        self._log_fh.write(msg)
+                        self._log_fh.flush()
+                    except Exception:
+                        pass
         except queue.Empty:
             pass
         self.after(120, self._drain_log)
 
     # ----- overall layout: notebook (left) + plot (right) + log (bottom) -----
     def _build_ui(self):
+        # Reserve the Log box at the bottom FIRST so taller tab content can never
+        # push it off-screen; then the main area fills the space above it.
+        logf = ttk.LabelFrame(self, text="Log")
+        logf.pack(side="bottom", fill="x", padx=8, pady=6)
+        self.log_text = tk.Text(logf, height=7, wrap="word", state="disabled")
+        sb = ttk.Scrollbar(logf, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.log_text.pack(side="left", fill="both", expand=True)
+
         main = ttk.PanedWindow(self, orient="horizontal")
         main.pack(side="top", fill="both", expand=True, padx=8, pady=(8, 4))
 
@@ -558,14 +587,6 @@ class VolcanoGUI(tk.Tk):
         ttk.Label(self.plot_container,
                   text="Run an analysis (tab 1), then plot from tab 2 or 3.",
                   foreground="#888").pack(expand=True)
-
-        logf = ttk.LabelFrame(self, text="Log")
-        logf.pack(side="bottom", fill="both", padx=8, pady=6)
-        self.log_text = tk.Text(logf, height=7, wrap="word", state="disabled")
-        sb = ttk.Scrollbar(logf, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        self.log_text.pack(side="left", fill="both", expand=True)
 
     def _scroll_inner(self, tab):
         sf = ScrollableFrame(tab, width=470)
@@ -690,6 +711,14 @@ class VolcanoGUI(tk.Tk):
         p["title"] = labeled_entry(box, 0, "Title", "PCA plot", width=26)
         p["filename"] = labeled_entry(box, 1, "Output filename", "PCA_plot.png", width=26)
         p["text"] = check(box, 2, "Label samples on the plot", True)
+
+        fonts = ttk.LabelFrame(inner, text="Font sizes")
+        fonts.pack(fill="x", padx=4, pady=4)
+        p["title_fontsize"] = labeled_entry(fonts, 0, "Title", "20")
+        p["axis_fontsize"] = labeled_entry(fonts, 1, "Axis labels", "15")
+        p["tick_fontsize"] = labeled_entry(fonts, 2, "Tick labels", "", tip="blank = default")
+        p["legend_fontsize"] = labeled_entry(fonts, 3, "Legend", "", tip="blank = default")
+        p["point_label_fontsize"] = labeled_entry(fonts, 4, "Sample labels", "4")
         ttk.Label(inner,
                   text="PCA uses every sample across all groups; missing values are\n"
                        "mean-imputed per protein (as in the original analysis). It does\n"
@@ -764,6 +793,14 @@ class VolcanoGUI(tk.Tk):
         v["max_label"] = labeled_entry(lab, 2, "Max labels", "100")
         v["file_suffix"] = labeled_entry(lab, 3, "File suffix", "")
 
+        fonts = ttk.LabelFrame(parent, text="Font sizes")
+        fonts.pack(fill="x", padx=4, pady=4)
+        v["title_fontsize"] = labeled_entry(fonts, 0, "Title", "24")
+        v["axis_label_fontsize"] = labeled_entry(fonts, 1, "Axis labels", "20")
+        v["tick_fontsize"] = labeled_entry(fonts, 2, "Tick labels", "16")
+        v["legend_fontsize"] = labeled_entry(fonts, 3, "Legend", "12")
+        v["gene_label_fontsize"] = labeled_entry(fonts, 4, "Gene labels", "14")
+
     # ----- tab 4: bubbleplot settings -----
     def _build_bubble_tab(self, tab):
         bar = ttk.Frame(tab)
@@ -809,6 +846,16 @@ class VolcanoGUI(tk.Tk):
         v["invert_xy"] = check(opt, 3, "Invert axes (no dendrogram)", False)
         v["selected_genes"] = labeled_entry(opt, 4, "Selected genes only", "", width=28,
                                             tip="'Desc | GENE', comma-separated; blank = all")
+
+        fonts = ttk.LabelFrame(parent, text="Font sizes")
+        fonts.pack(fill="x", padx=4, pady=4)
+        ttk.Label(fonts, text="(compound / protein label sizes are in the Figure box above)",
+                  foreground="#888").grid(row=0, column=0, columnspan=3, sticky="w", padx=4)
+        v["title_fontsize"] = labeled_entry(fonts, 1, "Title", "30")
+        v["axis_fontsize"] = labeled_entry(fonts, 2, "Distance axis", "30")
+        v["colorbar_label_fontsize"] = labeled_entry(fonts, 3, "Colorbar label", "30")
+        v["colorbar_tick_fontsize"] = labeled_entry(fonts, 4, "Colorbar ticks", "30")
+        v["legend_fontsize"] = labeled_entry(fonts, 5, "Legend", "30")
 
     # ----- data file browsing -----
     def _browse_pg(self):
@@ -895,12 +942,23 @@ class VolcanoGUI(tk.Tk):
             messagebox.showerror("Output folder error",
                                  f"Could not create outputs folder:\n{self.output_dir}\n\n{e}")
             return
+        # Start a fresh log file for this run in the outputs folder; everything
+        # shown in the Log box is mirrored to it (see _drain_log).
+        log_path = os.path.join(self.output_dir, "analysis_log.txt")
+        try:
+            if self._log_fh is not None:
+                self._log_fh.close()
+            self._log_fh = open(log_path, "w", encoding="utf-8")
+        except Exception:
+            self._log_fh = None
         for b in (self.run_btn, self.preview_btn, self.plot_all_btn, self.plot_btn, self.pca_btn, self.bubble_btn):
             b.configure(state="disabled")
         self.status.configure(text="Running...", foreground="#a60")
         log = logging.getLogger()
         log.info("Working folder: %s", os.path.dirname(cfg.pg_path))
         log.info("Outputs folder: %s", self.output_dir)
+        if self._log_fh is not None:
+            log.info("Log file: %s", log_path)
         log.info("Starting analysis for '%s'...", cfg.file)
         threading.Thread(target=self._run_worker, args=(cfg,), daemon=True).start()
 
@@ -1065,6 +1123,11 @@ class VolcanoGUI(tk.Tk):
                 filename=str(self.pca_vars["filename"].get()).strip() or "PCA_plot.png",
                 title=str(self.pca_vars["title"].get()),
                 text=bool(self.pca_vars["text"].get()),
+                title_fontsize=_req_float(self.pca_vars["title_fontsize"].get(), 20),
+                axis_fontsize=_req_float(self.pca_vars["axis_fontsize"].get(), 15),
+                tick_fontsize=_opt_float(self.pca_vars["tick_fontsize"].get()),
+                legend_fontsize=_opt_float(self.pca_vars["legend_fontsize"].get()),
+                point_label_fontsize=_req_float(self.pca_vars["point_label_fontsize"].get(), 4),
             )
             self._embed(plt.gcf())
             logging.getLogger().info("Plotted PCA")

@@ -9,7 +9,9 @@ import pandas as pd
 from adjustText import adjust_text
 
 
-def generate_pca_plot(df, group_columns, filename="PCA_plot.png", title="PCA of Samples", text=False):
+def generate_pca_plot(df, group_columns, filename="PCA_plot.png", title="PCA of Samples", text=False,
+                      title_fontsize=20, axis_fontsize=15, tick_fontsize=None,
+                      legend_fontsize=None, point_label_fontsize=4):
     """
     Generates and saves a PCA plot for the given data frame and group assignments.
 
@@ -18,6 +20,9 @@ def generate_pca_plot(df, group_columns, filename="PCA_plot.png", title="PCA of 
         group_columns (dict): Dictionary mapping group names to lists of column names.
         filename (str): The name of the file to save the plot.
         title (str): The title of the plot.
+        title_fontsize / axis_fontsize / tick_fontsize / legend_fontsize /
+        point_label_fontsize: font sizes for the corresponding elements
+        (tick/legend default to matplotlib's default when None).
     """
     # Select only the sample data columns for PCA
     all_sample_columns = [col for sublist in group_columns.values() for col in sublist]
@@ -62,15 +67,17 @@ def generate_pca_plot(df, group_columns, filename="PCA_plot.png", title="PCA of 
         alpha=0.8
     )
     if text:
-        texts = [plt.text(row['PC1'], row['PC2'], i.split('/')[-1], fontsize=4) for i, row in pca_df.iterrows()]
+        texts = [plt.text(row['PC1'], row['PC2'], i.split('/')[-1], fontsize=point_label_fontsize) for i, row in pca_df.iterrows()]
         adjust_text(texts, arrowprops=dict(arrowstyle='-', color='gray', lw=0.5))
 
 
     # Add labels and title
-    plt.title(title, fontsize=20)
-    plt.xlabel(f'PC1 ({pca.explained_variance_ratio_[0]*100:.2f}% variance)', fontsize=15)
-    plt.ylabel(f'PC2 ({pca.explained_variance_ratio_[1]*100:.2f}% variance)', fontsize=15)
-    plt.legend(title='Groups', bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.title(title, fontsize=title_fontsize)
+    plt.xlabel(f'PC1 ({pca.explained_variance_ratio_[0]*100:.2f}% variance)', fontsize=axis_fontsize)
+    plt.ylabel(f'PC2 ({pca.explained_variance_ratio_[1]*100:.2f}% variance)', fontsize=axis_fontsize)
+    if tick_fontsize:
+        plt.tick_params(axis='both', labelsize=tick_fontsize)
+    plt.legend(title='Groups', bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=legend_fontsize)
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.tight_layout()
 

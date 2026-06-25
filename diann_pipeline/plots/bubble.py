@@ -28,7 +28,9 @@ def bubble_dendro_plot(SAR, config, SAR_suffix="", figure_filename="bubble_plot.
                        dendro_bubble_height_ratio=[1,3], bubble_legend_width_ratio=[20,1],
                        compound_labelsize=20, protein_labelsize=20,
                        colorFCrange=[-4,0], highlight_G_loop=0, highlight_RT_loop=0, rainbow_palette=0,
-                       invert_xy=False, selected_genes=[], legend_num: Union[str, int] = "auto"):
+                       invert_xy=False, selected_genes=[], legend_num: Union[str, int] = "auto",
+                       title_fontsize=30, axis_fontsize=30, colorbar_label_fontsize=30,
+                       colorbar_tick_fontsize=30, legend_fontsize=30):
     # SAR_suffix="_1uM_vs_DMSO"
     # highlight_G_loop can be 0:none, 1: 5res-list, 2: 8res-list
     # invert_xy: if True, swap the x and y axes and do not draw the dendrogram
@@ -170,7 +172,7 @@ def bubble_dendro_plot(SAR, config, SAR_suffix="", figure_filename="bubble_plot.
         )
         ax_dendro.set_title("", fontsize=16)
         ax_dendro.set_xticks([])
-        ax_dendro.set_ylabel("Distance", fontsize=30)
+        ax_dendro.set_ylabel("Distance", fontsize=axis_fontsize)
         # Bubble plot subplot below dendrogram
         ax_bubble = fig.add_subplot(gs[1, 0])
     else:
@@ -216,8 +218,8 @@ def bubble_dendro_plot(SAR, config, SAR_suffix="", figure_filename="bubble_plot.
         ax_cbar = fig.add_subplot(gs_nested[:, 1])
 
     cbar = plt.colorbar(scatter, cax=ax_cbar, shrink=0.8, location="left", ticklocation="right")
-    cbar.set_label("Log2FC Value", fontsize=30, rotation=270, labelpad=30)
-    ax_cbar.tick_params(labelsize=30)
+    cbar.set_label("Log2FC Value", fontsize=colorbar_label_fontsize, rotation=270, labelpad=30)
+    ax_cbar.tick_params(labelsize=colorbar_tick_fontsize)
     ax_cbar.set_aspect(5)
     scatter.set_clim(colorFCrange[0], colorFCrange[1])
 
@@ -227,7 +229,7 @@ def bubble_dendro_plot(SAR, config, SAR_suffix="", figure_filename="bubble_plot.
         fmt=FuncFormatter(lambda x, pos: f"{x:.2f}")
     )
     new_labels = [f"FDR = {10**(-float(l)):.2g}" for l in labels]
-    ax_empty.legend(handles=handles, labels=new_labels, title="", fontsize=30,
+    ax_empty.legend(handles=handles, labels=new_labels, title="", fontsize=legend_fontsize,
                     labelspacing=1.5, borderaxespad=0.8, handleheight=0.2)
 
     # Color axis tick labels appropriately.
@@ -292,7 +294,7 @@ def bubble_dendro_plot(SAR, config, SAR_suffix="", figure_filename="bubble_plot.
 
     # Title and grid settings.
     if not invert_xy:
-        ax_dendro.set_title(fig_title, fontsize=30, pad=10)
+        ax_dendro.set_title(fig_title, fontsize=title_fontsize, pad=10)
     ax_bubble.grid(True, linestyle="--", alpha=0.5)
     for spine in ax_bubble.spines.values():
         spine.set_visible(False)

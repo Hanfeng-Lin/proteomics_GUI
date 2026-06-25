@@ -39,7 +39,8 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
                  file_suffix="", highlight_genes=[], protein_level_cutoff=None,
                  xlim=[], ylim=[], x_interval=2, y_interval=1, top_buffer=0.1,
                  imputation_option=None, PharosTCRD=None,
-                 highlight_kinase=False, highlight_ub=False, highlight_Gloops=False, highlight_RTloops=False, label_topX_mid_fc=None, max_label=100, label_most_extreme=None):
+                 highlight_kinase=False, highlight_ub=False, highlight_Gloops=False, highlight_RTloops=False, label_topX_mid_fc=None, max_label=100, label_most_extreme=None,
+                 title_fontsize=24, axis_label_fontsize=20, tick_fontsize=16, legend_fontsize=12, gene_label_fontsize=14):
     # Resolve settings that the notebook bound from globals.
     if mode is None:
         mode = config.mode
@@ -200,25 +201,25 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
     texts = []
     if len(concat_df) < max_label:
         for i, r in concat_df.iterrows():
-            texts.append(plt.text(x=r[logFC], y=-np.log10(r[FDR]), s=r['Genes'], size=14))
+            texts.append(plt.text(x=r[logFC], y=-np.log10(r[FDR]), s=r['Genes'], size=gene_label_fontsize))
 
     plt.xlim(xlim[0],xlim[1])
-    plt.xticks(ticks=np.arange(round(xlim[0]),round(xlim[1])+x_interval,x_interval),fontsize=16)
+    plt.xticks(ticks=np.arange(round(xlim[0]),round(xlim[1])+x_interval,x_interval),fontsize=tick_fontsize)
     if ylim:
         plt.ylim(ylim[0],ylim[1])
-        plt.yticks(ticks=np.arange(round(ylim[0]),round(ylim[1])+y_interval,y_interval),fontsize=16)
+        plt.yticks(ticks=np.arange(round(ylim[0]),round(ylim[1])+y_interval,y_interval),fontsize=tick_fontsize)
     else:
         plt.ylim(0, y_max*(1+top_buffer))
-    plt.xlabel(logFC, labelpad=10, size=20)
+    plt.xlabel(logFC, labelpad=10, size=axis_label_fontsize)
     if limma_option and output_adjPval:
-        plt.ylabel("-log(adjusted P value)", labelpad=10, size=20)
+        plt.ylabel("-log(adjusted P value)", labelpad=10, size=axis_label_fontsize)
     else:
-        plt.ylabel("-logFDR", labelpad=10, size=20)
-    plt.title(logFC.split("_", maxsplit=1)[1]+"\nn="+str(len(df[FDR].dropna())),size=24)
+        plt.ylabel("-logFDR", labelpad=10, size=axis_label_fontsize)
+    plt.title(logFC.split("_", maxsplit=1)[1]+"\nn="+str(len(df[FDR].dropna())),size=title_fontsize)
     if logFC_cutoff2:
         plt.axvline(-logFC_cutoff2,color="grey",linestyle="--")
     plt.axhline(-np.log10(FDR_cutoff),color="grey",linestyle="--")
-    plt.legend(loc="upper right", fontsize=12)
+    plt.legend(loc="upper right", fontsize=legend_fontsize)
     logFC=logFC[:3]+"₂"+logFC[4:]
 
     adjust_text(texts, force_text=(1,2),force_static =(1,2),arrowprops=dict(arrowstyle="-", color='black', lw=0.5))

@@ -194,6 +194,16 @@ def imputation(df, treated_group_name, control_group_name, group_columns, df_pep
         has_enough_peptides = protein_peptide_counts > peptide_count_cutoff
 
         proteins_to_check_idx = special_imputation_idx[has_enough_peptides]
+
+        # Report high-missing proteins skipped for too few peptides -- this is why
+        # such proteins (e.g. a low-peptide on-target like IRAK1) are NOT imputed.
+        insufficient_idx = special_imputation_idx[~has_enough_peptides]
+        if len(insufficient_idx) > 0:
+            logging.info(f"{len(insufficient_idx)} high-missing-value proteins have <= {peptide_count_cutoff} peptides "
+                         f"and are NOT imputed (peptide-count gate):")
+            for prot in insufficient_idx:
+                logging.info(f"  {prot}: {int(protein_peptide_counts[prot])} peptides (need > {peptide_count_cutoff}) -> not imputed")
+
         if not proteins_to_check_idx.empty:
             impute_decision = proteins_to_check_idx.to_series().apply(
                 _check_peptide_significance, args=(df_peptide, treated_group, control_group))

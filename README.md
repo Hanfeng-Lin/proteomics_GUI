@@ -69,28 +69,32 @@ the Groups box. The **Group
 assignments** box then shows how many samples matched each group — use **Preview
 groups** to check this from the file's columns before running.
 
-**Tab 2 — PCA.** Set a title / output filename and whether to label samples, then
-click **Plot PCA**. PCA uses all samples with per-protein mean imputation.
+**Tab 2 — PCA.** Set a title / output filename, whether to label samples, and the
+per-element **font sizes**, then click **Plot PCA**. PCA uses all samples with
+per-protein mean imputation.
 
 **Tab 3 — Volcano settings.** When the run finishes, a volcano for **every
 comparison** is generated automatically, one per tab in the plot area (each saved
 to PNG). Adjust any volcano parameter (thresholds, empirical-FDR curve, axes,
-highlight sets, labels) and click **Plot all comparisons** to regenerate them, or
-**Plot selected** for just the treatment/control pair in the dropdowns.
+highlight sets, labels, **font sizes**) and click **Plot all comparisons** to
+regenerate them, or **Plot selected** for just the treatment/control pair in the
+dropdowns.
 
 **Tab 4 — Bubbleplot settings.** Builds the clustered bubble/dendrogram plot over
 significantly down-regulated proteins. Define **SAR groups** (one per line,
 `label: treatmentA, treatmentB`; prefilled with your treatments after a run) and
-the **suffix** appended to each (e.g. `_vs_DMSO`), tweak figure/colour/highlight
-options, then click **Plot bubble**. (Needs at least two proteins with log2FC < -1
-and bh_FDR < 0.01 across the chosen treatments.)
+the **suffix** appended to each (e.g. `_vs_DMSO`), tweak figure / colour /
+highlight / **font-size** options, then click **Plot bubble**. (Needs at least two
+proteins with log2FC < -1 and bh_FDR < 0.01 across the chosen treatments.)
 
 ## Where outputs go
 
 All outputs — the volcano/PCA PNGs, the fold-change Excel, the limma/t-test
-summary CSVs — are written to a dedicated **`<stem>_outputs/`** folder created
-**next to your data** (the working folder) — e.g. data named `diann.*` writes to
-`diann_outputs/`. Nothing is written into the application folder.
+summary CSVs, and a full run log (**`analysis_log.txt`**, everything shown in the
+Log box, including which proteins were/weren't imputed and why) — are written to a
+dedicated **`<stem>_outputs/`** folder created **next to your data** (the working
+folder) — e.g. data named `diann.*` writes to `diann_outputs/`. Nothing is written
+into the application folder.
 
 ## Using your own data
 
