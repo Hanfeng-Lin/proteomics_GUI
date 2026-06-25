@@ -40,7 +40,9 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
                  xlim=[], ylim=[], x_interval=2, y_interval=1, top_buffer=0.1,
                  imputation_option=None, PharosTCRD=None,
                  highlight_kinase=False, highlight_ub=False, highlight_Gloops=False, highlight_RTloops=False, label_topX_mid_fc=None, max_label=100, label_most_extreme=None,
-                 title_fontsize=24, axis_label_fontsize=20, tick_fontsize=16, legend_fontsize=12, gene_label_fontsize=14):
+                 title_fontsize=24, axis_label_fontsize=20, tick_fontsize=16, legend_fontsize=12, gene_label_fontsize=14,
+                 label_up=True, label_down=True, label_imputed=False,
+                 adjust_labels=True, adjust_force_text=(1, 2), adjust_force_static=(1, 2), adjust_arrows=True):
     # Resolve settings that the notebook bound from globals.
     if mode is None:
         mode = config.mode
@@ -139,7 +141,21 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
     else:
         imputation_proteins = None
 
-    concat_df = pd.concat([up, down, slight_down, highlight]).drop_duplicates()
+    # Build the set of genes to label, honoring the up/down/imputed toggles.
+    # df.iloc[0:0] seeds an empty frame WITH the right columns so downstream
+    # label logic works even when every toggle is off.
+    label_parts = [df.iloc[0:0]]
+    if label_up:
+        label_parts.append(up)
+    if label_down:
+        label_parts.append(down)
+        if slight_down is not None:
+            label_parts.append(slight_down)
+    if highlight is not None:                       # explicit highlight_genes always labeled
+        label_parts.append(highlight)
+    if label_imputed and imputation_proteins is not None:
+        label_parts.append(imputation_proteins.dropna(subset=[logFC, FDR]))
+    concat_df = pd.concat(label_parts).drop_duplicates()
 
     if PharosTCRD:
         Tclin_filtered = [item for item in Tclin if item in df.index]
@@ -222,7 +238,9 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
     plt.legend(loc="upper right", fontsize=legend_fontsize)
     logFC=logFC[:3]+"₂"+logFC[4:]
 
-    adjust_text(texts, force_text=(1,2),force_static =(1,2),arrowprops=dict(arrowstyle="-", color='black', lw=0.5))
+    if adjust_labels and texts:
+        arrowprops = dict(arrowstyle="-", color='black', lw=0.5) if adjust_arrows else None
+        adjust_text(texts, force_text=adjust_force_text, force_static=adjust_force_static, arrowprops=arrowprops)
 
     imputation_suffix="_no_imputation"
     if imputation_option:

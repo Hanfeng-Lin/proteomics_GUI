@@ -76,9 +76,10 @@ per-protein mean imputation.
 **Tab 3 — Volcano settings.** When the run finishes, a volcano for **every
 comparison** is generated automatically, one per tab in the plot area (each saved
 to PNG). Adjust any volcano parameter (thresholds, empirical-FDR curve, axes,
-highlight sets, labels, **font sizes**) and click **Plot all comparisons** to
-regenerate them, or **Plot selected** for just the treatment/control pair in the
-dropdowns.
+highlight sets, **label selection** — up / down / imputed — and **placement**
+(adjustText on/off, repel force, arrows), **font sizes**) and click **Plot all
+comparisons** to regenerate them, or **Plot selected** for just the
+treatment/control pair in the dropdowns.
 
 **Tab 4 — Bubbleplot settings.** Builds the clustered bubble/dendrogram plot over
 significantly down-regulated proteins. Define **SAR groups** (one per line,

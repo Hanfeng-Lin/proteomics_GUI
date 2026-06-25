@@ -81,6 +81,17 @@ def _num_pair(s, name):
     return [float(parts[0]), float(parts[1])]
 
 
+def _force(s, default):
+    """Parse an adjustText force: '' -> default, '1' -> 1.0, '1, 2' -> (1.0, 2.0)."""
+    s = str(s).strip()
+    if s == "":
+        return default
+    parts = [p.strip() for p in s.split(",") if p.strip() != ""]
+    if len(parts) == 1:
+        return float(parts[0])
+    return (float(parts[0]), float(parts[1]))
+
+
 def build_volcano_params(v):
     """Turn a dict of raw widget values into volcano_plot() keyword arguments."""
     xmin = _as_float(v["xlim_min"], "x-axis min")
@@ -122,6 +133,13 @@ def build_volcano_params(v):
         label_topX_mid_fc=_opt_int(v["label_topX_mid_fc"]),
         max_label=_req_int(v["max_label"], 100),
         label_most_extreme=_opt_int(v["label_most_extreme"]),
+        label_up=bool(v["label_up"]),
+        label_down=bool(v["label_down"]),
+        label_imputed=bool(v["label_imputed"]),
+        adjust_labels=bool(v["adjust_labels"]),
+        adjust_arrows=bool(v["adjust_arrows"]),
+        adjust_force_text=_force(v["adjust_force_text"], (1, 2)),
+        adjust_force_static=_force(v["adjust_force_static"], (1, 2)),
         title_fontsize=_req_float(v["title_fontsize"], 24),
         axis_label_fontsize=_req_float(v["axis_label_fontsize"], 20),
         tick_fontsize=_req_float(v["tick_fontsize"], 16),
@@ -793,6 +811,18 @@ class VolcanoGUI(tk.Tk):
         v["label_most_extreme"] = labeled_entry(lab, 1, "Label most extreme (per side)", "", tip="blank = off")
         v["max_label"] = labeled_entry(lab, 2, "Max labels", "100")
         v["file_suffix"] = labeled_entry(lab, 3, "File suffix", "")
+
+        place = ttk.LabelFrame(parent, text="Label selection & placement")
+        place.pack(fill="x", padx=4, pady=4)
+        v["label_up"] = check(place, 0, "Label up-regulated genes", True)
+        v["label_down"] = check(place, 1, "Label down-regulated genes", True)
+        v["label_imputed"] = check(place, 2, "Label imputed genes", False)
+        v["adjust_labels"] = check(place, 3, "Auto-arrange labels (adjustText)", True)
+        v["adjust_arrows"] = check(place, 4, "Draw arrows to labels", True)
+        v["adjust_force_text"] = labeled_entry(place, 5, "Repel force (text)", "1, 2",
+                                               tip="number or 'x, y'")
+        v["adjust_force_static"] = labeled_entry(place, 6, "Repel force (points)", "1, 2",
+                                                 tip="number or 'x, y'")
 
         fonts = ttk.LabelFrame(parent, text="Font sizes")
         fonts.pack(fill="x", padx=4, pady=4)
