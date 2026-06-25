@@ -576,10 +576,10 @@ class VolcanoGUI(tk.Tk):
     def _build_config_tab(self, tab):
         bar = ttk.Frame(tab)
         bar.pack(side="bottom", fill="x", padx=4, pady=6)
-        self.run_btn = ttk.Button(bar, text="Run analysis", command=self._on_run)
-        self.run_btn.pack(side="left", padx=4)
         self.preview_btn = ttk.Button(bar, text="Preview groups", command=self._preview_groups)
         self.preview_btn.pack(side="left", padx=4)
+        self.run_btn = ttk.Button(bar, text="Run analysis", command=self._on_run)
+        self.run_btn.pack(side="left", padx=4)
         self.status = ttk.Label(bar, text="Not run yet", foreground="#a60")
         self.status.pack(side="left", padx=8)
 
