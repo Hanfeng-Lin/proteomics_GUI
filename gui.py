@@ -219,7 +219,7 @@ def build_config(v):
         control_group_detection_threshold=float(str(v["control_threshold"]).strip() or 0.5),
         imputation_option=bool(v["imputation_option"]),
         normalization_protein_id=str(v["normalization_protein_id"]).strip(),
-        pharos_tcrd=bool(v["pharos_tcrd"]),
+        pharos_tcrd=False,  # volcano-only display option; controlled on the Volcano tab
         limma_option=bool(v["limma_option"]),
         output_adjpval=bool(v["output_adjpval"]),
         pg_path=pg,
@@ -618,7 +618,8 @@ class VolcanoGUI(tk.Tk):
         v["imputation_option"] = check(checks, 0, "Imputation", True)
         v["limma_option"] = check(checks, 1, "Use limma (needs R)", True)
         v["output_adjpval"] = check(checks, 2, "Output adjusted P", True)
-        v["pharos_tcrd"] = check(checks, 3, "Pharos TCRD colors", False)
+        # Pharos TCRD is purely a volcano-plot coloring option -- it lives on the
+        # Volcano tab (Highlights), not here, since it doesn't affect the analysis.
 
     def _set_group_text(self, group_columns):
         """Fill the dedicated group-assignments box with per-group sample counts."""
@@ -943,7 +944,6 @@ class VolcanoGUI(tk.Tk):
                 self.treat_cb.set(groups[-1])
                 self.ctrl_cb.set(cfg.reference_group)
             self.vol_vars["imputation_option"].set(cfg.imputation_option)
-            self.vol_vars["PharosTCRD"].set(cfg.pharos_tcrd)
             # Prefill bubble SAR with the treatment groups vs the reference.
             treatments = [k for k in groups if k != cfg.reference_group]
             self._sar_text.delete("1.0", "end")
