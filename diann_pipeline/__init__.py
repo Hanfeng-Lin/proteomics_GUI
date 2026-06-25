@@ -36,6 +36,7 @@ from .pipeline import (
     run_workflow,
     run_limma,
     run_core,
+    export_downregulated,
 )
 
 __all__ = [
@@ -52,4 +53,5 @@ __all__ = [
     "run_workflow",
     "run_limma",
     "run_core",
+    "export_downregulated",
 ]

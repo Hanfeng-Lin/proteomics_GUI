@@ -36,7 +36,7 @@ def _ensure_r():
 
 
 def limma_differential_analysis(df, treated_group_name, control_group_name, group_columns,
-                                output_adjpval, min_valid_value=3):
+                                min_valid_value=3):
     r, robjects, pandas2ri = _ensure_r()
 
     # Extract relevant sample columns
@@ -74,20 +74,16 @@ def limma_differential_analysis(df, treated_group_name, control_group_name, grou
     r("limma_results <- topTable(fit2, adjust='BH', number=Inf, sort.by='none')")
 
     # Convert results back to pandas. topTable returns both P.Value (raw,
-    # moderated-t) and adj.P.Val (BH/FDR); we keep both.
+    # moderated-t) and adj.P.Val (BH/FDR); we always keep both, as their own
+    # columns -- Pvalue_<comp> (raw) and bh_FDR_<comp> (adjusted).
     pvalues_df = pandas2ri.rpy2py(r('limma_results'))
-    pvalue_column_name = f'bh_FDR_{treated_group_name}_vs_{control_group_name}'
     raw_p_column_name = f'Pvalue_{treated_group_name}_vs_{control_group_name}'
+    pvalue_column_name = f'bh_FDR_{treated_group_name}_vs_{control_group_name}'
     log10pvalue_column_name = f'-log_P_adj_{treated_group_name}_vs_{control_group_name}'
 
-    # Always expose the unadjusted (moderated-t) p-value as its own column.
     pvalues_df[raw_p_column_name] = pvalues_df['P.Value']
-    if output_adjpval:
-        pvalues_df = pvalues_df.rename(columns={'adj.P.Val': pvalue_column_name})
-    else:
-        pvalues_df = pvalues_df.rename(columns={'P.Value': pvalue_column_name})
+    pvalues_df = pvalues_df.rename(columns={'adj.P.Val': pvalue_column_name})
     pvalues_df[log10pvalue_column_name] = -np.log10(pvalues_df[pvalue_column_name])
-    # Return the raw p, the (adjusted) FDR used for plotting, and its -log10.
     return pvalues_df[[raw_p_column_name, pvalue_column_name, log10pvalue_column_name]]
 
 

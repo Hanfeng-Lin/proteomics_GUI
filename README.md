@@ -91,12 +91,18 @@ proteins with log2FC < -1 and bh_FDR < 0.01 across the chosen treatments.)
 
 ## Where outputs go
 
-All outputs — the volcano/PCA PNGs, the fold-change Excel, the limma/t-test
-summary CSVs, and a full run log (**`analysis_log.txt`**, everything shown in the
-Log box, including which proteins were/weren't imputed and why) — are written to a
-dedicated **`<stem>_outputs/`** folder created **next to your data** (the working
-folder) — e.g. data named `diann.*` writes to `diann_outputs/`. Nothing is written
-into the application folder.
+All outputs are written to a dedicated **`<stem>_outputs/`** folder created **next
+to your data** (the working folder) — e.g. data named `diann.*` writes to
+`diann_outputs/`. Nothing is written into the application folder. They include:
+
+- the volcano / PCA PNGs and the fold-change Excel (`FC_results_*.xlsx`; each
+  per-comparison sheet has an **`Imputed`** TRUE/FALSE column),
+- `final_analysis_summary_with_limma.csv` (raw `Pvalue_` and adjusted `bh_FDR_`),
+- **`downregulated_significant.xlsx`** — one row per significantly down-regulated
+  entry (log2FC ≤ −1, adjusted P ≤ 0.05) with columns *comparison, gene, uniprot,
+  log2FC, p, adjusted P, imputed*,
+- **`analysis_log.txt`** — the full run log (everything shown in the Log box,
+  including which proteins were/weren't imputed and why).
 
 ## Using your own data
 

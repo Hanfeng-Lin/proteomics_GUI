@@ -173,7 +173,7 @@ def run_limma(config, imputed_dataframes, df_final_results, group_columns, save_
         treated_name, control_name = comparison_name.split('_vs_')
 
         limma_results_df = limma_differential_analysis(
-            imputed_df, treated_name, control_name, group_columns, config.output_adjpval
+            imputed_df, treated_name, control_name, group_columns
         )
 
         if not limma_results_df.empty:
@@ -185,6 +185,47 @@ def run_limma(config, imputed_dataframes, df_final_results, group_columns, save_
         df_final_results.to_csv("final_analysis_summary_with_limma.csv", index=False)
     print("\nLimma analysis complete. Final summary has been updated.")
     return df_final_results
+
+
+# --------------------------------------------------------------------------- #
+# Export: significant down-regulated entries across all comparisons
+# --------------------------------------------------------------------------- #
+def export_downregulated(result, logfc_cutoff=1.0, fdr_cutoff=0.05,
+                         filename="downregulated_significant.xlsx"):
+    """Write one Excel row per significantly down-regulated (comparison, protein).
+
+    Down-regulated significant = log2FC <= -logfc_cutoff AND adjusted P <= fdr_cutoff.
+    Columns: comparison, gene, uniprot, log2FC, p, adjusted P, imputed (boolean).
+    Returns (filename, DataFrame).
+    """
+    summary = result.summary
+    rows = []
+    for comparison_name in result.imputed_dataframes.keys():
+        log2fc_col = f'log2FC_{comparison_name}'
+        fdr_col = f'bh_FDR_{comparison_name}'      # adjusted P (BH/FDR)
+        p_col = f'Pvalue_{comparison_name}'        # raw moderated-t p
+        if log2fc_col not in summary.columns or fdr_col not in summary.columns:
+            continue
+        imputed_set = set(result.imputation_dict.get(comparison_name, []))
+        mask = (summary[log2fc_col] <= -logfc_cutoff) & (summary[fdr_col] <= fdr_cutoff)
+        for idx, row in summary[mask].iterrows():
+            rows.append({
+                'comparison': comparison_name,
+                'gene': row.get('Genes'),
+                'uniprot': idx,
+                'log2FC': row[log2fc_col],
+                'p': row[p_col] if p_col in summary.columns else None,
+                'adjusted P': row[fdr_col],
+                'imputed': idx in imputed_set,
+            })
+
+    out = pd.DataFrame(rows, columns=['comparison', 'gene', 'uniprot', 'log2FC',
+                                      'p', 'adjusted P', 'imputed'])
+    out.to_excel(filename, index=False)
+    logger.info("Wrote %d down-regulated significant entries to %s "
+                "(log2FC <= -%s, adj P <= %s).", len(out), filename, logfc_cutoff, fdr_cutoff)
+    print(f"Down-regulated significant entries ({len(out)}) saved to {filename}")
+    return filename, out
 
 
 # --------------------------------------------------------------------------- #
@@ -208,7 +249,7 @@ def run_core(config: Optional[AnalysisConfig] = None, contaminants=None, save_ou
     )
     summary = run_limma(config, imputed_dataframes, summary, group_columns, save_csv=save_outputs)
 
-    return AnalysisResult(
+    result = AnalysisResult(
         config=config,
         df_original=df,
         df_peptide=df_peptide,
@@ -217,3 +258,6 @@ def run_core(config: Optional[AnalysisConfig] = None, contaminants=None, save_ou
         imputation_dict=imputation_dict,
         summary=summary,
     )
+    if save_outputs:
+        export_downregulated(result)
+    return result

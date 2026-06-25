@@ -53,7 +53,12 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
     output_adjPval = config.output_adjpval
 
     logFC="log2FC_"+treatment_group+"_vs_"+control_group
-    FDR="bh_FDR_"+treatment_group+"_vs_"+control_group
+    # Plot the adjusted FDR (bh_FDR_) or the raw p (Pvalue_) on the y-axis; both
+    # columns are always present in the summary now.
+    if output_adjPval:
+        FDR="bh_FDR_"+treatment_group+"_vs_"+control_group
+    else:
+        FDR="Pvalue_"+treatment_group+"_vs_"+control_group
     y_max = df[FDR].apply(lambda x:-np.log10(x)).max()
 
     plt.figure(figsize=(12, 9))
