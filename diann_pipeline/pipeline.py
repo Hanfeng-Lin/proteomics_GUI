@@ -44,7 +44,7 @@ class AnalysisResult:
 # --------------------------------------------------------------------------- #
 # cell 7: imputation + normalization + fold change + Excel export
 # --------------------------------------------------------------------------- #
-def _save_workflow_excel(config, df_original, group_columns, imputed_dataframes, df_final_results):
+def _save_workflow_excel(config, df_original, group_columns, imputed_dataframes, df_final_results, imputation_dict):
     if config.imputation_option:
         if config.normalization_protein_id:
             output_excel_path = "FC_results_imputation_and_normalization.xlsx"
@@ -78,6 +78,11 @@ def _save_workflow_excel(config, df_original, group_columns, imputed_dataframes,
             df_subset = imputed_df[intensity_cols].copy()
             df_subset[fc_col] = df_final_results[fc_col]
             df_subset[log2fc_col] = df_final_results[log2fc_col]
+
+            # Flag proteins imputed via the special high-missing-value protocol
+            # (the same set marked orange on the volcano plot) as TRUE / FALSE.
+            imputed_set = set(imputation_dict.get(comparison_name, []))
+            df_subset["Imputed"] = [idx in imputed_set for idx in df_subset.index]
 
             # Truncate sheet name to Excel's 31-character limit.
             sheet_name = comparison_name[:31]
@@ -150,7 +155,7 @@ def run_workflow(config, df_original, df_peptide, group_columns, save_excel=True
             df_final_results[log2fc_col] = df_with_fc[log2fc_col]
 
     if save_excel:
-        _save_workflow_excel(config, df_original, group_columns, imputed_dataframes, df_final_results)
+        _save_workflow_excel(config, df_original, group_columns, imputed_dataframes, df_final_results, imputation_dict)
 
     logger.info("Summary of imputed proteins per comparison:")
     for key, value in imputation_dict.items():
