@@ -1082,6 +1082,10 @@ class VolcanoGUI(tk.Tk):
         self.lookup_comp.grid(row=1, column=1, sticky="w", padx=4, pady=2)
         Tooltip(self.lookup_comp, "Which samples to show: a comparison (its control + treated samples) "
                                   "or 'All samples'.")
+        self.lookup_imputed = check(box, 2, "Also show imputed PG values", False,
+                                    hint="Add a 'PG (imputed)' column with the post-imputation protein-group "
+                                         "values for the selected comparison. Imputation is per-comparison, so "
+                                         "this needs a comparison (not 'All samples'); precursors are never imputed.")
         ttk.Label(inner,
                   text="Shows the raw (pre-imputation) protein-group intensity and each\n"
                        "precursor's intensity for the chosen protein, across the selected\n"
@@ -1137,7 +1141,9 @@ class VolcanoGUI(tk.Tk):
         gc = self.result.group_columns
         sel = self.lookup_comp.get()
         sample_info = []  # list of (group_name, sample_col)
+        comp = None
         if sel and sel != "All samples" and "_vs_" in sel:
+            comp = sel
             treated, control = sel.split("_vs_")
             for grp in (control, treated):
                 for col in gc.get(grp, []):
@@ -1147,16 +1153,28 @@ class VolcanoGUI(tk.Tk):
                 for col in cols:
                     sample_info.append((grp, col))
 
+        want_imputed = bool(self.lookup_imputed.get())
+        if want_imputed and comp is None:
+            messagebox.showinfo("Raw data lookup",
+                                "Imputed values are per-comparison — pick a comparison (not 'All samples') "
+                                "to also show the imputed PG column.")
         try:
-            self._show_lookup(pg, sample_info)
+            self._show_lookup(pg, sample_info, comp if want_imputed else None)
             logging.getLogger().info("Raw lookup: %s (%s) over %d samples", query, pg, len(sample_info))
         except Exception:
             self.log_q.put(traceback.format_exc() + "\n")
             messagebox.showerror("Raw data lookup", "Lookup failed. See the Log.")
 
-    def _show_lookup(self, pg, sample_info):
+    def _show_lookup(self, pg, sample_info, imputed_comp=None):
         df = self.result.df_original
         dpr = self.result.df_peptide
+
+        # Optional imputed PG values (per-comparison; only if the protein survived).
+        imp_df = None
+        if imputed_comp and imputed_comp in self.result.imputed_dataframes:
+            cand = self.result.imputed_dataframes[imputed_comp]
+            if pg in cand.index:
+                imp_df = cand
 
         genes = df.loc[pg].get("Genes") if "Genes" in df.columns else None
         desc = df.loc[pg].get("First.Protein.Description") if "First.Protein.Description" in df.columns else ""
@@ -1183,7 +1201,8 @@ class VolcanoGUI(tk.Tk):
         container = ttk.Frame(self.plot_container)
         container.pack(side="top", fill="both", expand=True, padx=4, pady=4)
 
-        cols = ["group", "sample", "pg"] + [f"p{i}" for i in range(len(prec))]
+        cols = ["group", "sample", "pg"] + (["pgimp"] if imp_df is not None else []) \
+            + [f"p{i}" for i in range(len(prec))]
         tree = ttk.Treeview(container, columns=cols, show="headings")
         vsb = ttk.Scrollbar(container, orient="vertical", command=tree.yview)
         hsb = ttk.Scrollbar(container, orient="horizontal", command=tree.xview)
@@ -1196,15 +1215,32 @@ class VolcanoGUI(tk.Tk):
 
         tree.heading("group", text="Group"); tree.column("group", width=130, anchor="w")
         tree.heading("sample", text="Sample"); tree.column("sample", width=240, anchor="w")
-        tree.heading("pg", text="PG"); tree.column("pg", width=90, anchor="e")
+        tree.heading("pg", text="PG (raw)" if imp_df is not None else "PG")
+        tree.column("pg", width=100, anchor="e")
+        if imp_df is not None:
+            tree.heading("pgimp", text="PG (imputed)"); tree.column("pgimp", width=110, anchor="e")
         for i, lab in enumerate(prec_labels):
             tree.heading(f"p{i}", text=lab)
             tree.column(f"p{i}", width=130, anchor="e")
 
+        # Give each group its own light background so the groups are easy to tell apart.
+        palette = ["#eaf3ff", "#fff0e6", "#eafbea", "#f3eaff", "#fffbe6",
+                   "#ffeaea", "#e6fffb", "#f2f2f2"]
+        group_tag = {}
+        for grp, _col in sample_info:
+            if grp not in group_tag:
+                tag = f"g{len(group_tag)}"
+                group_tag[grp] = tag
+                tree.tag_configure(tag, background=palette[(len(group_tag) - 1) % len(palette)])
+
+        imp_row = imp_df.loc[pg] if imp_df is not None else None
         for grp, col in sample_info:
             pg_val = df.loc[pg].get(col)
-            prec_vals = [self._fmt_val(prec.iloc[i].get(col)) for i in range(len(prec))]
-            tree.insert("", "end", values=[grp, self._short_sample(col), self._fmt_val(pg_val)] + prec_vals)
+            row = [grp, self._short_sample(col), self._fmt_val(pg_val)]
+            if imp_df is not None:
+                row.append(self._fmt_val(imp_row.get(col)))
+            row += [self._fmt_val(prec.iloc[i].get(col)) for i in range(len(prec))]
+            tree.insert("", "end", tags=(group_tag[grp],), values=row)
 
     # ----- data file browsing -----
     def _browse_pg(self):
