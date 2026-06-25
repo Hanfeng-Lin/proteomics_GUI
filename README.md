@@ -48,7 +48,8 @@ python gui.py
 ```
 
 The left side is a 4-step notebook; the plot canvas (right) and Log (bottom) are
-shared.
+shared. **Hover over any field, checkbox, or button to see a hint** describing what
+it does.
 
 **Tab 1 — Analysis configuration.** Click **Browse...** next to *Protein file*
 and pick your `*.pg_matrix.tsv`. The matching `*.pr_matrix.tsv` (same name/folder)

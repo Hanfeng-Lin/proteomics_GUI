@@ -287,28 +287,86 @@ class _QueueLogHandler(logging.Handler):
 # --------------------------------------------------------------------------- #
 # Small widget helpers
 # --------------------------------------------------------------------------- #
-def labeled_entry(parent, row, label, default="", width=14, tip=None):
-    ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
+class Tooltip:
+    """Show a small hint popup when the mouse hovers over a widget."""
+    def __init__(self, widget, text, delay=450, wrap=340):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.wrap = wrap
+        self.tip = None
+        self._after = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._after = self.widget.after(self.delay, self._show)
+
+    def _cancel(self):
+        if self._after is not None:
+            try:
+                self.widget.after_cancel(self._after)
+            except Exception:
+                pass
+            self._after = None
+
+    def _show(self):
+        if self.tip is not None:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 18
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        except Exception:
+            return
+        self.tip = tk.Toplevel(self.widget)
+        self.tip.wm_overrideredirect(True)
+        self.tip.wm_geometry(f"+{x}+{y}")
+        tk.Label(self.tip, text=self.text, justify="left", background="#ffffe0",
+                 relief="solid", borderwidth=1, wraplength=self.wrap, padx=6, pady=4).pack()
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self.tip is not None:
+            self.tip.destroy()
+            self.tip = None
+
+
+def labeled_entry(parent, row, label, default="", width=14, tip=None, hint=None):
+    lbl = ttk.Label(parent, text=label)
+    lbl.grid(row=row, column=0, sticky="w", padx=4, pady=2)
     var = tk.StringVar(value=str(default))
-    ttk.Entry(parent, textvariable=var, width=width).grid(row=row, column=1, sticky="w", padx=4, pady=2)
+    ent = ttk.Entry(parent, textvariable=var, width=width)
+    ent.grid(row=row, column=1, sticky="w", padx=4, pady=2)
     if tip:
         ttk.Label(parent, text=tip, foreground="#666").grid(row=row, column=2, sticky="w", padx=4)
+    if hint:
+        Tooltip(lbl, hint)
+        Tooltip(ent, hint)
     return var
 
 
-def check(parent, row, label, default=False):
+def check(parent, row, label, default=False, hint=None):
     var = tk.BooleanVar(value=default)
-    ttk.Checkbutton(parent, text=label, variable=var).grid(
-        row=row, column=0, columnspan=3, sticky="w", padx=4, pady=1)
+    cb = ttk.Checkbutton(parent, text=label, variable=var)
+    cb.grid(row=row, column=0, columnspan=3, sticky="w", padx=4, pady=1)
+    if hint:
+        Tooltip(cb, hint)
     return var
 
 
-def path_row(parent, row, label, browse_cmd, width=32):
+def path_row(parent, row, label, browse_cmd, width=32, hint=None):
     """A row with a label, a path entry, and a Browse button."""
-    ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
+    lbl = ttk.Label(parent, text=label)
+    lbl.grid(row=row, column=0, sticky="w", padx=4, pady=2)
     var = tk.StringVar()
-    ttk.Entry(parent, textvariable=var, width=width).grid(row=row, column=1, sticky="w", padx=4, pady=2)
+    ent = ttk.Entry(parent, textvariable=var, width=width)
+    ent.grid(row=row, column=1, sticky="w", padx=4, pady=2)
     ttk.Button(parent, text="Browse...", command=browse_cmd).grid(row=row, column=2, sticky="w", padx=4)
+    if hint:
+        Tooltip(lbl, hint)
+        Tooltip(ent, hint)
     return var
 
 
@@ -618,8 +676,12 @@ class VolcanoGUI(tk.Tk):
         bar.pack(side="bottom", fill="x", padx=4, pady=6)
         self.preview_btn = ttk.Button(bar, text="Preview groups", command=self._preview_groups)
         self.preview_btn.pack(side="left", padx=4)
+        Tooltip(self.preview_btn, "Show how many samples match each group, computed from the file's "
+                                  "column headers, without running the full analysis.")
         self.run_btn = ttk.Button(bar, text="Run analysis", command=self._on_run)
         self.run_btn.pack(side="left", padx=4)
+        Tooltip(self.run_btn, "Load the data and run the pipeline (impute -> fold change -> t-test/limma) "
+                              "in the background. Outputs and a log go to <stem>_outputs.")
         self.status = ttk.Label(bar, text="Not run yet", foreground="#a60")
         self.status.pack(side="left", padx=8)
 
@@ -636,28 +698,58 @@ class VolcanoGUI(tk.Tk):
         grid.pack(fill="x", padx=4, pady=4)
 
         v = self.cfg_vars
-        v["pg_path"] = path_row(grid, 0, "Protein file (.pg_matrix.tsv)", self._browse_pg)
-        v["pr_path"] = path_row(grid, 1, "Precursor file (.pr_matrix.tsv)", self._browse_pr)
+        v["pg_path"] = path_row(grid, 0, "Protein file (.pg_matrix.tsv)", self._browse_pg,
+                                hint="Your DIA-NN protein-group matrix (<stem>.pg_matrix.tsv). "
+                                     "The folder it lives in becomes the working folder, and outputs "
+                                     "go to <stem>_outputs there.")
+        v["pr_path"] = path_row(grid, 1, "Precursor file (.pr_matrix.tsv)", self._browse_pr,
+                                hint="The matching <stem>.pr_matrix.tsv (precursor/peptide matrix). "
+                                     "Auto-filled from the protein file. Used for the peptide-count "
+                                     "check that decides imputation of high-missing proteins.")
         self.path_label = ttk.Label(grid, text="No data selected.", foreground="#555", wraplength=440, justify="left")
         self.path_label.grid(row=2, column=0, columnspan=3, sticky="w", padx=4, pady=(0, 6))
-        ttk.Label(grid, text="Groups (comma)").grid(row=3, column=0, sticky="w", padx=4, pady=2)
+        lbl_groups = ttk.Label(grid, text="Groups (comma)")
+        lbl_groups.grid(row=3, column=0, sticky="w", padx=4, pady=2)
         v["group_names"] = tk.StringVar(value="DMSO, Positive_Control, IRAK1")
-        ttk.Entry(grid, textvariable=v["group_names"], width=34).grid(row=3, column=1, sticky="w", padx=4, pady=2)
-        ttk.Button(grid, text="Auto-pick...", command=self._autopick_groups).grid(row=3, column=2, sticky="w", padx=4)
-        v["reference_group"] = labeled_entry(grid, 4, "Reference group", "DMSO", width=18)
+        ent_groups = ttk.Entry(grid, textvariable=v["group_names"], width=34)
+        ent_groups.grid(row=3, column=1, sticky="w", padx=4, pady=2)
+        btn_auto = ttk.Button(grid, text="Auto-pick...", command=self._autopick_groups)
+        btn_auto.grid(row=3, column=2, sticky="w", padx=4)
+        _gh = ("Comma-separated group names. Each is matched as a regex against the sample-column "
+               "headers, so it just needs to be a unique substring (e.g. DMSO, IRAK1).")
+        Tooltip(lbl_groups, _gh)
+        Tooltip(ent_groups, _gh)
+        Tooltip(btn_auto, "Detect candidate group names from the sample-column headers and pick one.")
+        v["reference_group"] = labeled_entry(grid, 4, "Reference group", "DMSO", width=18,
+                                             hint="The control group every treatment is compared against "
+                                                  "(e.g. DMSO). Must be one of the group names above.")
         v["comparison_matrix"] = labeled_entry(grid, 5, "Comparisons", "", width=34,
-                                               tip="blank = all vs reference")
+                                               tip="blank = all vs reference",
+                                               hint="treated:control pairs, comma-separated "
+                                                    "(e.g. IRAK1:DMSO, Positive_Control:DMSO). "
+                                                    "Leave blank to compare every group against the reference.")
         ttk.Label(grid, text="(format: treated:control, comma-separated)", foreground="#666").grid(
             row=6, column=1, columnspan=2, sticky="w", padx=4)
-        v["mode"] = labeled_entry(grid, 7, "Mode (0/1)", "0", width=6, tip="0 = degradation, 1 = enrichment")
-        v["control_threshold"] = labeled_entry(grid, 8, "Ctrl detect thresh", "0.5", width=6)
-        v["normalization_protein_id"] = labeled_entry(grid, 9, "Normalize to UniProt", "", width=16, tip="blank = none")
+        v["mode"] = labeled_entry(grid, 7, "Mode (0/1)", "0", width=6, tip="0 = degradation, 1 = enrichment",
+                                  hint="0 = degradation (impute the treated group); "
+                                       "1 = enrichment/pulldown (impute the control group).")
+        v["control_threshold"] = labeled_entry(grid, 8, "Ctrl detect thresh", "0.5", width=6,
+                                               hint="Minimum fraction of reference samples a protein must be "
+                                                    "detected in to be kept. Only applied when Comparisons is blank.")
+        v["normalization_protein_id"] = labeled_entry(grid, 9, "Normalize to UniProt", "", width=16, tip="blank = none",
+                                                      hint="UniProt ID to normalize every sample to (e.g. a loading "
+                                                           "control / spike-in). Blank = no normalization.")
 
         checks = ttk.Frame(inner)
         checks.pack(fill="x", padx=4, pady=6)
-        v["imputation_option"] = check(checks, 0, "Imputation", True)
-        v["limma_option"] = check(checks, 1, "Use limma (needs R)", True)
-        v["output_adjpval"] = check(checks, 2, "Output adjusted P", True)
+        v["imputation_option"] = check(checks, 0, "Imputation", True,
+                                       hint="Impute missing values (treated and reference groups). "
+                                            "Off = use raw values only; proteins with too few valid values are dropped.")
+        v["limma_option"] = check(checks, 1, "Use limma (needs R)", True,
+                                  hint="Use R/limma for differential stats (needs R + R_HOME + the limma package). "
+                                       "Off = Student's t-test with Benjamini-Hochberg FDR.")
+        v["output_adjpval"] = check(checks, 2, "Output adjusted P", True,
+                                    hint="Report adjusted P-values (FDR) instead of raw P-values (limma only).")
         # Pharos TCRD is purely a volcano-plot coloring option -- it lives on the
         # Volcano tab (Highlights), not here, since it doesn't affect the analysis.
 
@@ -722,22 +814,30 @@ class VolcanoGUI(tk.Tk):
         bar.pack(side="bottom", fill="x", padx=4, pady=6)
         self.pca_btn = ttk.Button(bar, text="Plot PCA", command=self._on_plot_pca, state="disabled")
         self.pca_btn.pack(side="left", padx=4)
+        Tooltip(self.pca_btn, "Render the PCA plot with the options below (enabled after a run).")
 
         inner = self._scroll_inner(tab)
         box = ttk.LabelFrame(inner, text="PCA options")
         box.pack(fill="x", padx=4, pady=4)
         p = self.pca_vars
-        p["title"] = labeled_entry(box, 0, "Title", "PCA plot", width=26)
-        p["filename"] = labeled_entry(box, 1, "Output filename", "PCA_plot.png", width=26)
-        p["text"] = check(box, 2, "Label samples on the plot", True)
+        p["title"] = labeled_entry(box, 0, "Title", "PCA plot", width=26,
+                                   hint="Plot title shown at the top of the PCA figure.")
+        p["filename"] = labeled_entry(box, 1, "Output filename", "PCA_plot.png", width=26,
+                                      hint="File name for the saved PCA image, written to the outputs folder.")
+        p["text"] = check(box, 2, "Label samples on the plot", True,
+                          hint="Annotate each point with its sample name (uses adjustText to avoid overlap).")
 
         fonts = ttk.LabelFrame(inner, text="Font sizes")
         fonts.pack(fill="x", padx=4, pady=4)
-        p["title_fontsize"] = labeled_entry(fonts, 0, "Title", "20")
-        p["axis_fontsize"] = labeled_entry(fonts, 1, "Axis labels", "15")
-        p["tick_fontsize"] = labeled_entry(fonts, 2, "Tick labels", "", tip="blank = default")
-        p["legend_fontsize"] = labeled_entry(fonts, 3, "Legend", "", tip="blank = default")
-        p["point_label_fontsize"] = labeled_entry(fonts, 4, "Sample labels", "4")
+        p["title_fontsize"] = labeled_entry(fonts, 0, "Title", "20", hint="Font size of the plot title.")
+        p["axis_fontsize"] = labeled_entry(fonts, 1, "Axis labels", "15",
+                                           hint="Font size of the PC1 / PC2 axis labels.")
+        p["tick_fontsize"] = labeled_entry(fonts, 2, "Tick labels", "", tip="blank = default",
+                                           hint="Font size of the axis tick numbers. Blank = matplotlib default.")
+        p["legend_fontsize"] = labeled_entry(fonts, 3, "Legend", "", tip="blank = default",
+                                             hint="Font size of the group legend. Blank = matplotlib default.")
+        p["point_label_fontsize"] = labeled_entry(fonts, 4, "Sample labels", "4",
+                                                  hint="Font size of the per-sample text labels (when enabled above).")
         ttk.Label(inner,
                   text="PCA uses every sample across all groups; missing values are\n"
                        "mean-imputed per protein (as in the original analysis). It does\n"
@@ -750,8 +850,10 @@ class VolcanoGUI(tk.Tk):
         bar.pack(side="bottom", fill="x", padx=4, pady=6)
         self.plot_all_btn = ttk.Button(bar, text="Plot all comparisons", command=self._on_plot_all, state="disabled")
         self.plot_all_btn.pack(side="left", padx=3)
+        Tooltip(self.plot_all_btn, "Plot a volcano for every comparison (one tab each) using the current settings.")
         self.plot_btn = ttk.Button(bar, text="Plot selected", command=self._on_plot_volcano, state="disabled")
         self.plot_btn.pack(side="left", padx=3)
+        Tooltip(self.plot_btn, "Plot a volcano for just the treatment/control pair selected below.")
 
         sel = ttk.Frame(tab)
         sel.pack(side="top", fill="x", padx=4, pady=4)
@@ -771,66 +873,111 @@ class VolcanoGUI(tk.Tk):
 
         thr = ttk.LabelFrame(parent, text="Thresholds")
         thr.pack(fill="x", padx=4, pady=4)
-        v["logFC_cutoff"] = labeled_entry(thr, 0, "log2FC cutoff", "1", tip="blank = none")
-        v["logFC_cutoff2"] = labeled_entry(thr, 1, "log2FC cutoff 2", "", tip="secondary, blank = none")
-        v["FDR_cutoff"] = labeled_entry(thr, 2, "FDR cutoff", "0.05")
-        v["protein_level_cutoff"] = labeled_entry(thr, 3, "Protein-level cutoff", "", tip="blank = off")
+        v["logFC_cutoff"] = labeled_entry(thr, 0, "log2FC cutoff", "1", tip="blank = none",
+                                          hint="Vertical cutoff: |log2FC| >= this (with FDR cutoff) marks up/down hits "
+                                               "and draws the dashed lines. Blank = no fold-change cutoff.")
+        v["logFC_cutoff2"] = labeled_entry(thr, 1, "log2FC cutoff 2", "", tip="secondary, blank = none",
+                                           hint="Optional second, looser down-regulation cutoff (e.g. >35% down) shown "
+                                                "as small blue points. Blank = off.")
+        v["FDR_cutoff"] = labeled_entry(thr, 2, "FDR cutoff", "0.05",
+                                        hint="Significance threshold on the adjusted P-value / FDR; also the horizontal "
+                                             "dashed line.")
+        v["protein_level_cutoff"] = labeled_entry(thr, 3, "Protein-level cutoff", "", tip="blank = off",
+                                                  hint="Highlight down-regulated proteins whose mean control abundance "
+                                                       "is below 1000 in a separate colour. Blank = off.")
 
         emp = ttk.LabelFrame(parent, text="Empirical FDR")
         emp.pack(fill="x", padx=4, pady=4)
-        v["use_empirical_fdr"] = check(emp, 0, "Use empirical FDR curve", False)
-        v["fdr_alpha"] = labeled_entry(emp, 1, "FDR alpha", "0.05")
-        v["kappa"] = labeled_entry(emp, 2, "kappa", "1e-6")
-        v["p_value_cutoff"] = labeled_entry(emp, 3, "p_value_cutoff", "1")
-        v["mode"] = labeled_entry(emp, 4, "Mode override", "Auto", tip="Auto / 0 / 1")
+        v["use_empirical_fdr"] = check(emp, 0, "Use empirical FDR curve", False,
+                                       hint="Replace the straight cutoffs with a hyperbolic curve fitted by the "
+                                            "wrong-side (decoy) method below, instead of fixed log2FC/FDR lines.")
+        v["fdr_alpha"] = labeled_entry(emp, 1, "FDR alpha", "0.05",
+                                       hint="Target empirical FDR for the fitted curve (e.g. 0.05).")
+        v["kappa"] = labeled_entry(emp, 2, "kappa", "1e-6",
+                                   hint="Small pseudocount used when estimating the empirical FDR ratio.")
+        v["p_value_cutoff"] = labeled_entry(emp, 3, "p_value_cutoff", "1",
+                                            hint="Vertical offset (in -log10 P) of the empirical-FDR curve's asymptote.")
+        v["mode"] = labeled_entry(emp, 4, "Mode override", "Auto", tip="Auto / 0 / 1",
+                                  hint="Side the curve is fit toward. Auto = use the analysis mode "
+                                       "(0 degradation -> down side, 1 enrichment -> up side).")
 
         axes = ttk.LabelFrame(parent, text="Axes")
         axes.pack(fill="x", padx=4, pady=4)
-        v["xlim_min"] = labeled_entry(axes, 0, "x min", "-8")
-        v["xlim_max"] = labeled_entry(axes, 1, "x max", "8")
-        v["ylim_min"] = labeled_entry(axes, 2, "y min", "", tip="blank = auto")
-        v["ylim_max"] = labeled_entry(axes, 3, "y max", "", tip="blank = auto")
-        v["x_interval"] = labeled_entry(axes, 4, "x tick interval", "2")
-        v["y_interval"] = labeled_entry(axes, 5, "y tick interval", "1")
-        v["top_buffer"] = labeled_entry(axes, 6, "Top buffer", "0.1")
+        v["xlim_min"] = labeled_entry(axes, 0, "x min", "-8", hint="Left limit of the log2FC (x) axis.")
+        v["xlim_max"] = labeled_entry(axes, 1, "x max", "8", hint="Right limit of the log2FC (x) axis.")
+        v["ylim_min"] = labeled_entry(axes, 2, "y min", "", tip="blank = auto",
+                                      hint="Bottom limit of the -log10(FDR) (y) axis. Blank = auto.")
+        v["ylim_max"] = labeled_entry(axes, 3, "y max", "", tip="blank = auto",
+                                      hint="Top limit of the y axis. Blank = auto (max + top buffer).")
+        v["x_interval"] = labeled_entry(axes, 4, "x tick interval", "2", hint="Spacing between x-axis ticks.")
+        v["y_interval"] = labeled_entry(axes, 5, "y tick interval", "1",
+                                        hint="Spacing between y-axis ticks (used when y limits are set).")
+        v["top_buffer"] = labeled_entry(axes, 6, "Top buffer", "0.1",
+                                        hint="Extra headroom above the tallest point, as a fraction (auto y only).")
 
         hi = ttk.LabelFrame(parent, text="Highlights")
         hi.pack(fill="x", padx=4, pady=4)
-        v["imputation_option"] = check(hi, 0, "Mark imputed proteins (orange)", True)
-        v["PharosTCRD"] = check(hi, 1, "Pharos TCRD classes", False)
-        v["highlight_kinase"] = check(hi, 2, "Protein kinases", False)
-        v["highlight_ub"] = check(hi, 3, "Ubiquitin-related", False)
-        v["highlight_Gloops"] = check(hi, 4, "G-loop proteins", False)
-        v["highlight_RTloops"] = check(hi, 5, "RT-loop proteins", False)
+        v["imputation_option"] = check(hi, 0, "Mark imputed proteins (orange)", True,
+                                       hint="Colour proteins that were imputed (special high-missing protocol) orange.")
+        v["PharosTCRD"] = check(hi, 1, "Pharos TCRD classes", False,
+                                hint="Colour proteins by Pharos target-development level (Tclin/Tchem/Tbio/Tdark).")
+        v["highlight_kinase"] = check(hi, 2, "Protein kinases", False,
+                                      hint="Mark proteins in the protein-kinase reference list.")
+        v["highlight_ub"] = check(hi, 3, "Ubiquitin-related", False,
+                                  hint="Mark ubiquitin-related proteins (and add the significant ones to the labels).")
+        v["highlight_Gloops"] = check(hi, 4, "G-loop proteins", False,
+                                      hint="Mark proteins in the G-loop reference list.")
+        v["highlight_RTloops"] = check(hi, 5, "RT-loop proteins", False,
+                                       hint="Mark proteins in the RT-loop reference list.")
         v["highlight_genes"] = labeled_entry(hi, 6, "Highlight genes", "", width=28,
-                                             tip="UniProt IDs, comma-separated")
+                                             tip="UniProt IDs, comma-separated",
+                                             hint="Specific proteins to mark (green) and always label. "
+                                                  "Comma-separated UniProt IDs, e.g. Q13546, P51617.")
 
         lab = ttk.LabelFrame(parent, text="Labels")
         lab.pack(fill="x", padx=4, pady=4)
-        v["label_topX_mid_fc"] = labeled_entry(lab, 0, "Label top-X mid FC", "", tip="blank = off")
-        v["label_most_extreme"] = labeled_entry(lab, 1, "Label most extreme (per side)", "", tip="blank = off")
-        v["max_label"] = labeled_entry(lab, 2, "Max labels", "100")
-        v["file_suffix"] = labeled_entry(lab, 3, "File suffix", "")
+        v["label_topX_mid_fc"] = labeled_entry(lab, 0, "Label top-X mid FC", "", tip="blank = off",
+                                               hint="Also label the X most significant 'mid' down-regulated proteins "
+                                                    "(log2FC between -1 and -0.32). Blank/0 = off.")
+        v["label_most_extreme"] = labeled_entry(lab, 1, "Label most extreme (per side)", "", tip="blank = off",
+                                                hint="Label only the N points farthest from the origin on each side "
+                                                     "(overrides the up/down label set). Blank = off.")
+        v["max_label"] = labeled_entry(lab, 2, "Max labels", "100",
+                                       hint="Skip drawing labels entirely if more than this many would be shown "
+                                            "(prevents an unreadable, slow plot).")
+        v["file_suffix"] = labeled_entry(lab, 3, "File suffix", "",
+                                         hint="Extra text appended to the saved PNG file name.")
 
         place = ttk.LabelFrame(parent, text="Label selection & placement")
         place.pack(fill="x", padx=4, pady=4)
-        v["label_up"] = check(place, 0, "Label up-regulated genes", True)
-        v["label_down"] = check(place, 1, "Label down-regulated genes", True)
-        v["label_imputed"] = check(place, 2, "Label imputed genes", False)
-        v["adjust_labels"] = check(place, 3, "Auto-arrange labels (adjustText)", True)
-        v["adjust_arrows"] = check(place, 4, "Draw arrows to labels", True)
+        v["label_up"] = check(place, 0, "Label up-regulated genes", True,
+                              hint="Add the significant up-regulated (red) genes to the text labels.")
+        v["label_down"] = check(place, 1, "Label down-regulated genes", True,
+                                hint="Add the significant down-regulated (blue) genes to the text labels.")
+        v["label_imputed"] = check(place, 2, "Label imputed genes", False,
+                                   hint="Add the imputed (orange) proteins to the text labels.")
+        v["adjust_labels"] = check(place, 3, "Auto-arrange labels (adjustText)", True,
+                                   hint="Reposition labels to avoid overlap (adjustText). Off = place at the point, "
+                                        "no arrows -- much faster with many labels.")
+        v["adjust_arrows"] = check(place, 4, "Draw arrows to labels", True,
+                                   hint="Draw thin connector lines from each moved label back to its point.")
         v["adjust_force_text"] = labeled_entry(place, 5, "Repel force (text)", "1, 2",
-                                               tip="number or 'x, y'")
+                                               tip="number or 'x, y'",
+                                               hint="How strongly labels push apart from each other. "
+                                                    "A number, or 'x, y' for separate horizontal/vertical force.")
         v["adjust_force_static"] = labeled_entry(place, 6, "Repel force (points)", "1, 2",
-                                                 tip="number or 'x, y'")
+                                                 tip="number or 'x, y'",
+                                                 hint="How strongly labels are pushed away from the data points.")
 
         fonts = ttk.LabelFrame(parent, text="Font sizes")
         fonts.pack(fill="x", padx=4, pady=4)
-        v["title_fontsize"] = labeled_entry(fonts, 0, "Title", "24")
-        v["axis_label_fontsize"] = labeled_entry(fonts, 1, "Axis labels", "20")
-        v["tick_fontsize"] = labeled_entry(fonts, 2, "Tick labels", "16")
-        v["legend_fontsize"] = labeled_entry(fonts, 3, "Legend", "12")
-        v["gene_label_fontsize"] = labeled_entry(fonts, 4, "Gene labels", "14")
+        v["title_fontsize"] = labeled_entry(fonts, 0, "Title", "24", hint="Font size of the plot title.")
+        v["axis_label_fontsize"] = labeled_entry(fonts, 1, "Axis labels", "20",
+                                                 hint="Font size of the x/y axis labels.")
+        v["tick_fontsize"] = labeled_entry(fonts, 2, "Tick labels", "16", hint="Font size of the axis tick numbers.")
+        v["legend_fontsize"] = labeled_entry(fonts, 3, "Legend", "12", hint="Font size of the legend.")
+        v["gene_label_fontsize"] = labeled_entry(fonts, 4, "Gene labels", "14",
+                                                 hint="Font size of the per-gene text labels on the plot.")
 
     # ----- tab 4: bubbleplot settings -----
     def _build_bubble_tab(self, tab):
@@ -838,6 +985,8 @@ class VolcanoGUI(tk.Tk):
         bar.pack(side="bottom", fill="x", padx=4, pady=6)
         self.bubble_btn = ttk.Button(bar, text="Plot bubble", command=self._on_plot_bubble, state="disabled")
         self.bubble_btn.pack(side="left", padx=4)
+        Tooltip(self.bubble_btn, "Render the clustered bubble/dendrogram plot from the SAR groups and "
+                                 "options below (enabled after a run).")
 
         self._build_bubble_widgets(self._scroll_inner(tab))
 
@@ -854,39 +1003,62 @@ class VolcanoGUI(tk.Tk):
         self._sar_text.pack(fill="x", padx=4, pady=3)
         suf = ttk.Frame(sar)
         suf.pack(fill="x")
-        v["sar_suffix"] = labeled_entry(suf, 0, "Suffix appended to each", "_vs_DMSO", width=18)
+        v["sar_suffix"] = labeled_entry(suf, 0, "Suffix appended to each", "_vs_DMSO", width=18,
+                                        hint="Appended to every treatment name above to form the comparison suffix, "
+                                             "e.g. IRAK1 + '_vs_DMSO' -> log2FC_IRAK1_vs_DMSO.")
 
         fig = ttk.LabelFrame(parent, text="Figure")
         fig.pack(fill="x", padx=4, pady=4)
-        v["fig_title"] = labeled_entry(fig, 0, "Title", "", width=28)
-        v["figure_filename"] = labeled_entry(fig, 1, "Output filename", "bubble_plot.png", width=24)
-        v["fig_width"] = labeled_entry(fig, 2, "Width (in)", "18")
-        v["fig_height"] = labeled_entry(fig, 3, "Height (in)", "12")
-        v["dendro_bubble_height_ratio"] = labeled_entry(fig, 4, "Dendro:bubble height", "1, 3")
-        v["bubble_legend_width_ratio"] = labeled_entry(fig, 5, "Bubble:legend width", "20, 1")
-        v["compound_labelsize"] = labeled_entry(fig, 6, "Compound label size", "20")
-        v["protein_labelsize"] = labeled_entry(fig, 7, "Protein label size", "20")
-        v["colorFCrange"] = labeled_entry(fig, 8, "Color FC range", "-4, 0")
-        v["legend_num"] = labeled_entry(fig, 9, "Legend # entries", "auto", tip="auto or integer")
+        v["fig_title"] = labeled_entry(fig, 0, "Title", "", width=28, hint="Title shown above the plot.")
+        v["figure_filename"] = labeled_entry(fig, 1, "Output filename", "bubble_plot.png", width=24,
+                                             hint="File name for the saved bubble image (in the outputs folder).")
+        v["fig_width"] = labeled_entry(fig, 2, "Width (in)", "18",
+                                       hint="Figure width in inches. Increase for many compounds/proteins.")
+        v["fig_height"] = labeled_entry(fig, 3, "Height (in)", "12", hint="Figure height in inches.")
+        v["dendro_bubble_height_ratio"] = labeled_entry(fig, 4, "Dendro:bubble height", "1, 3",
+                                                        hint="Height ratio of the dendrogram to the bubble grid, "
+                                                             "e.g. '1, 3'. Ignored when axes are inverted.")
+        v["bubble_legend_width_ratio"] = labeled_entry(fig, 5, "Bubble:legend width", "20, 1",
+                                                       hint="Width ratio of the bubble grid to the legend/colorbar column.")
+        v["compound_labelsize"] = labeled_entry(fig, 6, "Compound label size", "20",
+                                                hint="Font size of the treatment/compound axis labels.")
+        v["protein_labelsize"] = labeled_entry(fig, 7, "Protein label size", "20",
+                                               hint="Font size of the protein axis labels.")
+        v["colorFCrange"] = labeled_entry(fig, 8, "Color FC range", "-4, 0",
+                                          hint="log2FC range mapped to the colour scale, e.g. '-4, 0'. "
+                                               "Values outside are clipped to the ends.")
+        v["legend_num"] = labeled_entry(fig, 9, "Legend # entries", "auto", tip="auto or integer",
+                                        hint="Number of size-legend entries (FDR). 'auto' or an integer.")
 
         opt = ttk.LabelFrame(parent, text="Options")
         opt.pack(fill="x", padx=4, pady=4)
-        v["highlight_G_loop"] = labeled_entry(opt, 0, "Highlight G-loop", "0", tip="0 none / 1 5res / 2 8res")
-        v["highlight_RT_loop"] = labeled_entry(opt, 1, "Highlight RT-loop", "0", tip="0 none / 1 5res")
-        v["rainbow_palette"] = check(opt, 2, "Rainbow palette (else coolwarm)", False)
-        v["invert_xy"] = check(opt, 3, "Invert axes (no dendrogram)", False)
+        v["highlight_G_loop"] = labeled_entry(opt, 0, "Highlight G-loop", "0", tip="0 none / 1 5res / 2 8res",
+                                              hint="Shade protein labels in the G-loop set: 0 = off, "
+                                                   "1 = 5-residue list, 2 = 8-residue list.")
+        v["highlight_RT_loop"] = labeled_entry(opt, 1, "Highlight RT-loop", "0", tip="0 none / 1 5res",
+                                               hint="Shade protein labels in the RT-loop set: 0 = off, 1 = 5-residue list.")
+        v["rainbow_palette"] = check(opt, 2, "Rainbow palette (else coolwarm)", False,
+                                     hint="Use a reversed Spectral (rainbow) colour map instead of coolwarm for log2FC.")
+        v["invert_xy"] = check(opt, 3, "Invert axes (no dendrogram)", False,
+                               hint="Swap the x/y axes (treatments on x, proteins on y) and omit the dendrogram.")
         v["selected_genes"] = labeled_entry(opt, 4, "Selected genes only", "", width=28,
-                                            tip="'Desc | GENE', comma-separated; blank = all")
+                                            tip="'Desc | GENE', comma-separated; blank = all",
+                                            hint="Restrict the plot to these proteins, written as "
+                                                 "'Description | GENE' (the row labels), comma-separated. Blank = all.")
 
         fonts = ttk.LabelFrame(parent, text="Font sizes")
         fonts.pack(fill="x", padx=4, pady=4)
         ttk.Label(fonts, text="(compound / protein label sizes are in the Figure box above)",
                   foreground="#888").grid(row=0, column=0, columnspan=3, sticky="w", padx=4)
-        v["title_fontsize"] = labeled_entry(fonts, 1, "Title", "30")
-        v["axis_fontsize"] = labeled_entry(fonts, 2, "Distance axis", "30")
-        v["colorbar_label_fontsize"] = labeled_entry(fonts, 3, "Colorbar label", "30")
-        v["colorbar_tick_fontsize"] = labeled_entry(fonts, 4, "Colorbar ticks", "30")
-        v["legend_fontsize"] = labeled_entry(fonts, 5, "Legend", "30")
+        v["title_fontsize"] = labeled_entry(fonts, 1, "Title", "30", hint="Font size of the plot title.")
+        v["axis_fontsize"] = labeled_entry(fonts, 2, "Distance axis", "30",
+                                           hint="Font size of the dendrogram 'Distance' axis label.")
+        v["colorbar_label_fontsize"] = labeled_entry(fonts, 3, "Colorbar label", "30",
+                                                     hint="Font size of the 'Log2FC Value' colorbar label.")
+        v["colorbar_tick_fontsize"] = labeled_entry(fonts, 4, "Colorbar ticks", "30",
+                                                    hint="Font size of the colorbar tick numbers.")
+        v["legend_fontsize"] = labeled_entry(fonts, 5, "Legend", "30",
+                                             hint="Font size of the FDR size-legend entries.")
 
     # ----- data file browsing -----
     def _browse_pg(self):
