@@ -22,6 +22,7 @@ import queue
 import logging
 import threading
 import traceback
+import contextvars
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -960,7 +961,20 @@ class VolcanoGUI(tk.Tk):
         if self._log_fh is not None:
             log.info("Log file: %s", log_path)
         log.info("Starting analysis for '%s'...", cfg.file)
-        threading.Thread(target=self._run_worker, args=(cfg,), daemon=True).start()
+        # rpy2's R<->pandas conversion rules live in a contextvars Context that a
+        # freshly spawned thread does NOT inherit -- which made limma work on the
+        # first run but fail on the second (new thread, empty context, and the
+        # one-time activate() is skipped). Initialise R here on the main thread so
+        # the rules persist in this context, then run each worker inside a COPY of
+        # it so every run sees them.
+        if cfg.limma_option:
+            try:
+                from diann_pipeline.stats import _ensure_r
+                _ensure_r()
+            except Exception:
+                pass  # a genuine R/limma error will be logged by the worker
+        ctx = contextvars.copy_context()
+        threading.Thread(target=ctx.run, args=(self._run_worker, cfg), daemon=True).start()
 
     def _run_worker(self, cfg):
         old_out, old_err = sys.stdout, sys.stderr
