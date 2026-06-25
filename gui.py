@@ -641,7 +641,8 @@ class VolcanoGUI(tk.Tk):
         main = ttk.PanedWindow(self, orient="horizontal")
         main.pack(side="top", fill="both", expand=True, padx=8, pady=(8, 4))
 
-        nb = ttk.Notebook(main)
+        self.nb = ttk.Notebook(main)
+        nb = self.nb
         main.add(nb, weight=0)
         cfg_tab = ttk.Frame(nb)
         pca_tab = ttk.Frame(nb)
@@ -659,13 +660,46 @@ class VolcanoGUI(tk.Tk):
         self._build_bubble_tab(bub_tab)
         self._build_lookup_tab(lookup_tab)
 
+        # Right side: a persistent per-tab output area (cache). Each plotting tab
+        # keeps its own last-rendered plot/table; switching tabs swaps which one
+        # is shown (the notebook tab index maps to a key below).
         right = ttk.LabelFrame(main, text="Plot / table")
         main.add(right, weight=1)
-        self.plot_container = ttk.Frame(right)
-        self.plot_container.pack(side="top", fill="both", expand=True)
-        ttk.Label(self.plot_container,
+        self.plot_host = ttk.Frame(right)
+        self.plot_host.pack(side="top", fill="both", expand=True)
+        self.tab_frames = {k: ttk.Frame(self.plot_host) for k in ("pca", "volcano", "bubble", "lookup")}
+        for k, f in self.tab_frames.items():
+            ttk.Label(f, text="Nothing rendered yet — use the button on this tab after a run.",
+                      foreground="#888").pack(expand=True)
+        self.placeholder_frame = ttk.Frame(self.plot_host)
+        ttk.Label(self.placeholder_frame,
                   text="Run an analysis (tab 1), then plot from tabs 2-4 or look up raw data on tab 5.",
                   foreground="#888").pack(expand=True)
+        self._current_area = None
+        self._tab_index_key = {1: "pca", 2: "volcano", 3: "bubble", 4: "lookup"}
+        self._show_tab_area(None)
+        nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+    def _show_tab_area(self, key):
+        """Show the output frame for `key` (None -> the generic placeholder)."""
+        target = self.tab_frames.get(key, self.placeholder_frame)
+        if target is self._current_area:
+            return
+        if self._current_area is not None:
+            self._current_area.pack_forget()
+        target.pack(fill="both", expand=True)
+        self._current_area = target
+
+    def _tab_area(self, key):
+        """Return the (cleared) output frame for a plotting tab."""
+        frame = self.tab_frames[key]
+        for w in frame.winfo_children():
+            w.destroy()
+        return frame
+
+    def _on_tab_changed(self, _event=None):
+        idx = self.nb.index(self.nb.select())
+        self._show_tab_area(self._tab_index_key.get(idx))
 
     def _scroll_inner(self, tab):
         sf = ScrollableFrame(tab, width=470)
@@ -1189,16 +1223,15 @@ class VolcanoGUI(tk.Tk):
         prec_labels = [str(prec.iloc[i][label_col]) if label_col else f"precursor {i + 1}"
                        for i in range(len(prec))]
 
-        # Clear the right area and add an info header + the table.
-        for w in self.plot_container.winfo_children():
-            w.destroy()
+        # Render into the lookup tab's cached output frame.
+        area = self._tab_area("lookup")
         self._plot_canvas = None
-        ttk.Label(self.plot_container,
+        ttk.Label(area,
                   text=f"Protein.Group: {pg}    Genes: {genes}\n{desc}    "
                        f"({len(prec)} precursor{'s' if len(prec) != 1 else ''})",
                   justify="left", foreground="#222").pack(anchor="w", padx=8, pady=(6, 2))
 
-        container = ttk.Frame(self.plot_container)
+        container = ttk.Frame(area)
         container.pack(side="top", fill="both", expand=True, padx=4, pady=4)
 
         cols = ["group", "sample", "pg"] + (["pgimp"] if imp_df is not None else []) \
@@ -1241,6 +1274,8 @@ class VolcanoGUI(tk.Tk):
                 row.append(self._fmt_val(imp_row.get(col)))
             row += [self._fmt_val(prec.iloc[i].get(col)) for i in range(len(prec))]
             tree.insert("", "end", tags=(group_tag[grp],), values=row)
+
+        self._show_tab_area("lookup")
 
     # ----- data file browsing -----
     def _browse_pg(self):
@@ -1412,25 +1447,25 @@ class VolcanoGUI(tk.Tk):
             for b in (self.plot_all_btn, self.plot_btn, self.pca_btn, self.bubble_btn, self.lookup_btn):
                 b.configure(state="normal")
             self.status.configure(text="Analysis complete", foreground="#080")
-            # By default, generate volcanoes for ALL comparisons right away.
+            # By default, generate volcanoes for ALL comparisons and show that tab.
+            self.nb.select(2)  # Volcano tab
             self.after(50, self._on_plot_all)
         self.after(150, self._poll_result)
 
-    # ----- plotting (stages 2 & 3) -----
-    def _embed(self, fig):
-        for w in self.plot_container.winfo_children():
-            w.destroy()
-        canvas = FigureCanvasTkAgg(fig, master=self.plot_container)
+    # ----- plotting (renders into the active tab's cached output frame) -----
+    def _embed(self, fig, key):
+        container = self._tab_area(key)
+        canvas = FigureCanvasTkAgg(fig, master=container)
         canvas.draw()
-        NavigationToolbar2Tk(canvas, self.plot_container).update()
+        NavigationToolbar2Tk(canvas, container).update()
         canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
         self._plot_canvas = canvas
+        self._show_tab_area(key)
 
-    def _embed_notebook(self, items):
-        """Embed several figures, one tab per (name, figure)."""
-        for w in self.plot_container.winfo_children():
-            w.destroy()
-        nb = ttk.Notebook(self.plot_container)
+    def _embed_notebook(self, items, key="volcano"):
+        """Embed several figures, one inner tab per (name, figure)."""
+        container = self._tab_area(key)
+        nb = ttk.Notebook(container)
         nb.pack(side="top", fill="both", expand=True)
         self._tab_canvases = []
         for name, fig in items:
@@ -1442,6 +1477,7 @@ class VolcanoGUI(tk.Tk):
             canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
             self._tab_canvases.append(canvas)
         self._plot_canvas = self._tab_canvases[-1] if self._tab_canvases else None
+        self._show_tab_area(key)
 
     def _on_plot_all(self):
         """Generate a volcano for every comparison using the current settings."""
@@ -1508,7 +1544,7 @@ class VolcanoGUI(tk.Tk):
                 config=self.cfg,
                 **params,
             )
-            self._embed(plt.gcf())
+            self._embed(plt.gcf(), "volcano")
             logging.getLogger().info("Plotted volcano %s vs %s", treated, control)
         except Exception:
             self.log_q.put(traceback.format_exc() + "\n")
@@ -1531,7 +1567,7 @@ class VolcanoGUI(tk.Tk):
                 legend_fontsize=_opt_float(self.pca_vars["legend_fontsize"].get()),
                 point_label_fontsize=_req_float(self.pca_vars["point_label_fontsize"].get(), 4),
             )
-            self._embed(plt.gcf())
+            self._embed(plt.gcf(), "pca")
             logging.getLogger().info("Plotted PCA")
         except Exception:
             self.log_q.put(traceback.format_exc() + "\n")
@@ -1553,7 +1589,7 @@ class VolcanoGUI(tk.Tk):
             self.result.summary.to_csv(analyzed)
             plt.close("all")
             bubble_dendro_plot(SAR, self.cfg, **kwargs)
-            self._embed(plt.gcf())
+            self._embed(plt.gcf(), "bubble")
             logging.getLogger().info("Plotted bubble plot -> %s", kwargs["figure_filename"])
         except Exception:
             self.log_q.put(traceback.format_exc() + "\n")
