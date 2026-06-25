@@ -188,16 +188,20 @@ def run_limma(config, imputed_dataframes, df_final_results, group_columns, save_
 
 
 # --------------------------------------------------------------------------- #
-# Export: significant down-regulated entries across all comparisons
+# Export: significant up-/down-regulated entries across all comparisons
 # --------------------------------------------------------------------------- #
-def export_downregulated(result, logfc_cutoff=1.0, fdr_cutoff=0.05,
-                         filename="downregulated_significant.xlsx"):
-    """Write one Excel row per significantly down-regulated (comparison, protein).
+def export_significant(result, direction="down", logfc_cutoff=1.0, fdr_cutoff=0.05, filename=None):
+    """Write one Excel row per significant (comparison, protein) in one direction.
 
-    Down-regulated significant = log2FC <= -logfc_cutoff AND adjusted P <= fdr_cutoff.
-    Columns: comparison, gene, uniprot, log2FC, p, adjusted P, imputed (boolean).
-    Returns (filename, DataFrame).
+    direction "down": log2FC <= -logfc_cutoff;  "up": log2FC >= logfc_cutoff.
+    Both also require adjusted P <= fdr_cutoff. Columns: comparison, gene, uniprot,
+    log2FC, p, adjusted P, imputed (boolean). Returns (filename, DataFrame).
     """
+    if direction not in ("down", "up"):
+        raise ValueError("direction must be 'down' or 'up'")
+    if filename is None:
+        filename = f"{direction}regulated_significant.xlsx"
+
     summary = result.summary
     rows = []
     for comparison_name in result.imputed_dataframes.keys():
@@ -207,7 +211,11 @@ def export_downregulated(result, logfc_cutoff=1.0, fdr_cutoff=0.05,
         if log2fc_col not in summary.columns or fdr_col not in summary.columns:
             continue
         imputed_set = set(result.imputation_dict.get(comparison_name, []))
-        mask = (summary[log2fc_col] <= -logfc_cutoff) & (summary[fdr_col] <= fdr_cutoff)
+        if direction == "down":
+            fc_mask = summary[log2fc_col] <= -logfc_cutoff
+        else:
+            fc_mask = summary[log2fc_col] >= logfc_cutoff
+        mask = fc_mask & (summary[fdr_col] <= fdr_cutoff)
         for idx, row in summary[mask].iterrows():
             rows.append({
                 'comparison': comparison_name,
@@ -222,10 +230,17 @@ def export_downregulated(result, logfc_cutoff=1.0, fdr_cutoff=0.05,
     out = pd.DataFrame(rows, columns=['comparison', 'gene', 'uniprot', 'log2FC',
                                       'p', 'adjusted P', 'imputed'])
     out.to_excel(filename, index=False)
-    logger.info("Wrote %d down-regulated significant entries to %s "
-                "(log2FC <= -%s, adj P <= %s).", len(out), filename, logfc_cutoff, fdr_cutoff)
-    print(f"Down-regulated significant entries ({len(out)}) saved to {filename}")
+    logger.info("Wrote %d %s-regulated significant entries to %s.", len(out), direction, filename)
+    print(f"{direction.capitalize()}-regulated significant entries ({len(out)}) saved to {filename}")
     return filename, out
+
+
+def export_downregulated(result, logfc_cutoff=1.0, fdr_cutoff=0.05, filename=None):
+    return export_significant(result, "down", logfc_cutoff, fdr_cutoff, filename)
+
+
+def export_upregulated(result, logfc_cutoff=1.0, fdr_cutoff=0.05, filename=None):
+    return export_significant(result, "up", logfc_cutoff, fdr_cutoff, filename)
 
 
 # --------------------------------------------------------------------------- #
@@ -260,4 +275,5 @@ def run_core(config: Optional[AnalysisConfig] = None, contaminants=None, save_ou
     )
     if save_outputs:
         export_downregulated(result)
+        export_upregulated(result)
     return result
