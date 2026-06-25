@@ -1,14 +1,14 @@
-"""diann_pipeline -- importable library version of DataAnalysis_Jurkat.ipynb.
+"""scripts -- importable analysis library for the proteomics GUI.
 
 The notebook's flat global namespace is replaced by explicit objects:
     * AnalysisConfig    -- all settings (was cell 0)
     * AnalysisResult    -- dataset + per-comparison results (was the loose globals)
-The analysis math is unchanged from the notebook.
+The analysis math is unchanged from the original notebook.
 
 Typical use::
 
-    from diann_pipeline import AnalysisConfig, run_core
-    from diann_pipeline.plots import generate_pca_plot, volcano_plot
+    from scripts import AnalysisConfig, run_core
+    from scripts.plots import generate_pca_plot, volcano_plot
 
     cfg = AnalysisConfig()                 # defaults reproduce the Jurkat run
     result = run_core(cfg)                 # load -> impute -> FC -> limma

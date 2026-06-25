@@ -10,7 +10,7 @@ exposed. The figure is shown live in the window and also saved to PNG.
 diann_volcano_gui/
 ├── start_gui.bat           ← double-click to launch (finds the 'proteomics' env)
 ├── gui.py                  ← the application
-├── diann_pipeline/         ← analysis library the GUI calls
+├── scripts/                ← analysis library the GUI calls
 └── environment.yml         ← conda environment spec (recreates the 'proteomics' env)
 ```
 
@@ -89,17 +89,23 @@ the **suffix** appended to each (e.g. `_vs_DMSO`), tweak figure / colour /
 highlight / **font-size** options, then click **Plot bubble**. (Needs at least two
 proteins with log2FC < -1 and bh_FDR < 0.01 across the chosen treatments.)
 
+**Tab 5 — Raw data lookup.** Enter a **UniProt accession** (e.g. `P51617`) or a
+**gene symbol** (e.g. `IRAK1`) and pick a comparison (or *All samples*), then click
+**Look up**. The right panel shows a table of the raw (pre-imputation) intensities
+for that protein across the selected samples — the protein-group (**PG**) value
+plus each **precursor (PR)** value, one column per precursor.
+
 ## Where outputs go
 
-All outputs are written to a dedicated **`<stem>_outputs/`** folder created **next
-to your data** (the working folder) — e.g. data named `diann.*` writes to
-`diann_outputs/`. Nothing is written into the application folder. They include:
+All outputs are written to a dedicated **`proteomics_GUI_output/`** folder created
+**next to your data** (the working folder). Nothing is written into the
+application folder. They include:
 
 - the volcano / PCA PNGs and the fold-change Excel (`FC_results_*.xlsx`; each
   per-comparison sheet has an **`Imputed`** TRUE/FALSE column),
 - `final_analysis_summary_with_limma.csv` (raw `Pvalue_` and adjusted `bh_FDR_`),
-- **`downregulated_significant.xlsx`** and **`upregulated_significant.xlsx`** —
-  one row per significant entry (log2FC ≤ −1 / ≥ 1, adjusted P ≤ 0.05) with columns
+- **`significant_downreg.xlsx`** and **`significant_upreg.xlsx`** — one row per
+  significant entry (log2FC ≤ −1 / ≥ 1, adjusted P ≤ 0.05) with columns
   *comparison, gene, uniprot, log2FC, p, adjusted P, imputed*,
 - **`analysis_log.txt`** — the full run log (everything shown in the Log box,
   including which proteins were/weren't imputed and why).
@@ -116,4 +122,4 @@ group**, and **Comparisons** to match your sample-column names.
 
 - The analysis math is identical to the original notebook
   (`DataAnalysis_Jurkat.ipynb`); the GUI only collects parameters and calls the
-  library. See `diann_pipeline/README.md` for the library design.
+  library. See `scripts/README.md` for the library design.

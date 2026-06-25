@@ -8,7 +8,8 @@ __pycache__/
 *.pg_matrix.tsv
 *.pr_matrix.tsv
 
-# Analysis outputs (written to a "<stem>_outputs" folder next to the data)
+# Analysis outputs (written to a "proteomics_GUI_output" folder next to the data)
+proteomics_GUI_output/
 *_outputs/
 *_analyzed.csv
 FC_results*.xlsx

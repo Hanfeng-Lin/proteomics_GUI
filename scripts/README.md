@@ -1,4 +1,4 @@
-# diann_pipeline
+# scripts
 
 Importable-library version of `DataAnalysis_Jurkat.ipynb`. The notebook's single
 flat global namespace is replaced by explicit objects and functions, but **the
@@ -40,12 +40,12 @@ What changed vs. the notebook (plumbing only, no math):
 ## Usage
 
 Run from the directory holding `<file>.pg_matrix.tsv` / `<file>.pr_matrix.tsv`,
-with the parent of `diann_pipeline/` on `PYTHONPATH` (or run the example, which is
+with the parent of `scripts/` on `PYTHONPATH` (or run the example, which is
 already there):
 
 ```python
-from diann_pipeline import AnalysisConfig, run_core
-from diann_pipeline.plots import generate_pca_plot, volcano_plot
+from scripts import AnalysisConfig, run_core
+from scripts.plots import generate_pca_plot, volcano_plot
 
 cfg = AnalysisConfig()                    # or AnalysisConfig(file="myrun", group_names=[...], ...)
 result = run_core(cfg)                    # load -> impute -> FC -> (t-test) -> limma

@@ -200,7 +200,7 @@ def export_significant(result, direction="down", logfc_cutoff=1.0, fdr_cutoff=0.
     if direction not in ("down", "up"):
         raise ValueError("direction must be 'down' or 'up'")
     if filename is None:
-        filename = f"{direction}regulated_significant.xlsx"
+        filename = "significant_downreg.xlsx" if direction == "down" else "significant_upreg.xlsx"
 
     summary = result.summary
     rows = []

@@ -1,4 +1,4 @@
-"""Desktop GUI for the diann_pipeline proteomics analysis.
+"""Desktop GUI for the proteomics analysis (the `scripts` package).
 
 Left side is a 3-step notebook:
   1. Analysis configuration  -> browse pg/pr files, set groups, run run_core()
@@ -11,8 +11,8 @@ The plot canvas (right) and log (bottom) are shared across the steps. The workin
 folder is wherever the chosen pg/pr files live, and all outputs are written to a
 dedicated "<stem>_outputs" folder beside the data.
 
-Nothing in diann_pipeline is modified; the GUI only collects parameters and calls
-the existing functions. Run it with:  python gui.py
+The GUI only collects parameters and calls the functions in `scripts`.
+Run it with:  python gui.py
 """
 
 import os
@@ -34,10 +34,10 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 
 # Make the package importable when running this file directly.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from diann_pipeline import AnalysisConfig, run_core
-from diann_pipeline.plots.volcano import volcano_plot
-from diann_pipeline.plots.pca import generate_pca_plot
-from diann_pipeline.plots.bubble import bubble_dendro_plot
+from scripts import AnalysisConfig, run_core
+from scripts.plots.volcano import volcano_plot
+from scripts.plots.pca import generate_pca_plot
+from scripts.plots.bubble import bubble_dendro_plot
 
 
 # --------------------------------------------------------------------------- #
@@ -647,21 +647,24 @@ class VolcanoGUI(tk.Tk):
         pca_tab = ttk.Frame(nb)
         vol_tab = ttk.Frame(nb)
         bub_tab = ttk.Frame(nb)
+        lookup_tab = ttk.Frame(nb)
         nb.add(cfg_tab, text="1. Analysis configuration")
         nb.add(pca_tab, text="2. PCA")
         nb.add(vol_tab, text="3. Volcano settings")
         nb.add(bub_tab, text="4. Bubbleplot settings")
+        nb.add(lookup_tab, text="5. Raw data lookup")
         self._build_config_tab(cfg_tab)
         self._build_pca_tab(pca_tab)
         self._build_volcano_tab(vol_tab)
         self._build_bubble_tab(bub_tab)
+        self._build_lookup_tab(lookup_tab)
 
-        right = ttk.LabelFrame(main, text="Plot")
+        right = ttk.LabelFrame(main, text="Plot / table")
         main.add(right, weight=1)
         self.plot_container = ttk.Frame(right)
         self.plot_container.pack(side="top", fill="both", expand=True)
         ttk.Label(self.plot_container,
-                  text="Run an analysis (tab 1), then plot from tab 2 or 3.",
+                  text="Run an analysis (tab 1), then plot from tabs 2-4 or look up raw data on tab 5.",
                   foreground="#888").pack(expand=True)
 
     def _scroll_inner(self, tab):
@@ -680,7 +683,7 @@ class VolcanoGUI(tk.Tk):
         self.run_btn = ttk.Button(bar, text="Run analysis", command=self._on_run)
         self.run_btn.pack(side="left", padx=4)
         Tooltip(self.run_btn, "Load the data and run the pipeline (impute -> fold change -> t-test/limma) "
-                              "in the background. Outputs and a log go to <stem>_outputs.")
+                              "in the background. Outputs and a log go to proteomics_GUI_output.")
         self.status = ttk.Label(bar, text="Not run yet", foreground="#a60")
         self.status.pack(side="left", padx=8)
 
@@ -700,7 +703,7 @@ class VolcanoGUI(tk.Tk):
         v["pg_path"] = path_row(grid, 0, "Protein file (.pg_matrix.tsv)", self._browse_pg,
                                 hint="Your DIA-NN protein-group matrix (<stem>.pg_matrix.tsv). "
                                      "The folder it lives in becomes the working folder, and outputs "
-                                     "go to <stem>_outputs there.")
+                                     "go to a proteomics_GUI_output folder there.")
         v["pr_path"] = path_row(grid, 1, "Precursor file (.pr_matrix.tsv)", self._browse_pr,
                                 hint="The matching <stem>.pr_matrix.tsv (precursor/peptide matrix). "
                                      "Auto-filled from the protein file. Used for the peptide-count "
@@ -799,7 +802,7 @@ class VolcanoGUI(tk.Tk):
             return
         try:
             import pandas as pd
-            from diann_pipeline.io import assign_groups
+            from scripts.io import assign_groups
             df0 = pd.read_csv(pg, sep="\t", index_col=0, nrows=0)  # header only
             self._set_group_text(assign_groups(df0, groups))
             logging.getLogger().info("Previewed group assignments from %s", os.path.basename(pg))
@@ -1059,6 +1062,150 @@ class VolcanoGUI(tk.Tk):
         v["legend_fontsize"] = labeled_entry(fonts, 5, "Legend", "30",
                                              hint="Font size of the FDR size-legend entries.")
 
+    # ----- tab 5: raw data lookup -----
+    def _build_lookup_tab(self, tab):
+        bar = ttk.Frame(tab)
+        bar.pack(side="bottom", fill="x", padx=4, pady=6)
+        self.lookup_btn = ttk.Button(bar, text="Look up", command=self._on_lookup, state="disabled")
+        self.lookup_btn.pack(side="left", padx=4)
+        Tooltip(self.lookup_btn, "Pull the raw PG (protein-group) and PR (precursor/peptide) "
+                                 "intensities for this protein into the table on the right.")
+
+        inner = self._scroll_inner(tab)
+        box = ttk.LabelFrame(inner, text="Raw data lookup")
+        box.pack(fill="x", padx=4, pady=4)
+        self.lookup_query = labeled_entry(box, 0, "UniProt or gene", "", width=22,
+                                          hint="A UniProt accession (e.g. P51617) or a gene symbol "
+                                               "(e.g. IRAK1). Genes are matched case-insensitively.")
+        ttk.Label(box, text="Samples").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self.lookup_comp = ttk.Combobox(box, state="readonly", width=24, values=[])
+        self.lookup_comp.grid(row=1, column=1, sticky="w", padx=4, pady=2)
+        Tooltip(self.lookup_comp, "Which samples to show: a comparison (its control + treated samples) "
+                                  "or 'All samples'.")
+        ttk.Label(inner,
+                  text="Shows the raw (pre-imputation) protein-group intensity and each\n"
+                       "precursor's intensity for the chosen protein, across the selected\n"
+                       "samples. The table appears in the area on the right.",
+                  foreground="#666", justify="left").pack(anchor="w", padx=8, pady=6)
+
+    @staticmethod
+    def _short_sample(name):
+        base = str(name).split("/")[-1].split("\\")[-1]
+        for ext in (".mzML", ".raw", ".d", ".dia"):
+            if base.lower().endswith(ext.lower()):
+                base = base[: -len(ext)]
+        return base
+
+    @staticmethod
+    def _fmt_val(v):
+        try:
+            f = float(v)
+            return "" if f != f else f"{f:.1f}"   # f != f detects NaN
+        except (TypeError, ValueError):
+            return "" if v is None else str(v)
+
+    def _resolve_protein(self, query):
+        """Resolve a UniProt accession or gene symbol to a Protein.Group index."""
+        df = self.result.df_original
+        q = query.strip()
+        if q in df.index:
+            return q
+        # UniProt token inside a ';'-joined Protein.Group (e.g. 'A0A0B4J237;P01737')
+        for idx in df.index:
+            if q in str(idx).split(";"):
+                return idx
+        # Gene symbol match (Genes column may be ';'-separated), case-insensitive
+        if "Genes" in df.columns:
+            ql = q.lower()
+            for idx, g in df["Genes"].items():
+                if ql in [t.strip().lower() for t in str(g).split(";")]:
+                    return idx
+        return None
+
+    def _on_lookup(self):
+        if self.result is None:
+            return
+        query = self.lookup_query.get().strip()
+        if not query:
+            messagebox.showerror("Raw data lookup", "Enter a UniProt ID or gene name.")
+            return
+        pg = self._resolve_protein(query)
+        if pg is None:
+            messagebox.showinfo("Raw data lookup", f"'{query}' was not found in the protein matrix.")
+            return
+
+        gc = self.result.group_columns
+        sel = self.lookup_comp.get()
+        sample_info = []  # list of (group_name, sample_col)
+        if sel and sel != "All samples" and "_vs_" in sel:
+            treated, control = sel.split("_vs_")
+            for grp in (control, treated):
+                for col in gc.get(grp, []):
+                    sample_info.append((grp, col))
+        else:
+            for grp, cols in gc.items():
+                for col in cols:
+                    sample_info.append((grp, col))
+
+        try:
+            self._show_lookup(pg, sample_info)
+            logging.getLogger().info("Raw lookup: %s (%s) over %d samples", query, pg, len(sample_info))
+        except Exception:
+            self.log_q.put(traceback.format_exc() + "\n")
+            messagebox.showerror("Raw data lookup", "Lookup failed. See the Log.")
+
+    def _show_lookup(self, pg, sample_info):
+        df = self.result.df_original
+        dpr = self.result.df_peptide
+
+        genes = df.loc[pg].get("Genes") if "Genes" in df.columns else None
+        desc = df.loc[pg].get("First.Protein.Description") if "First.Protein.Description" in df.columns else ""
+
+        # Precursor rows for this protein (PR matrix is indexed by Protein.Group).
+        if pg in dpr.index:
+            prec = dpr.loc[[pg]]
+        else:
+            prec = dpr.iloc[0:0]
+        label_col = next((c for c in ("Precursor.Id", "Modified.Sequence", "Stripped.Sequence")
+                          if c in dpr.columns), None)
+        prec_labels = [str(prec.iloc[i][label_col]) if label_col else f"precursor {i + 1}"
+                       for i in range(len(prec))]
+
+        # Clear the right area and add an info header + the table.
+        for w in self.plot_container.winfo_children():
+            w.destroy()
+        self._plot_canvas = None
+        ttk.Label(self.plot_container,
+                  text=f"Protein.Group: {pg}    Genes: {genes}\n{desc}    "
+                       f"({len(prec)} precursor{'s' if len(prec) != 1 else ''})",
+                  justify="left", foreground="#222").pack(anchor="w", padx=8, pady=(6, 2))
+
+        container = ttk.Frame(self.plot_container)
+        container.pack(side="top", fill="both", expand=True, padx=4, pady=4)
+
+        cols = ["group", "sample", "pg"] + [f"p{i}" for i in range(len(prec))]
+        tree = ttk.Treeview(container, columns=cols, show="headings")
+        vsb = ttk.Scrollbar(container, orient="vertical", command=tree.yview)
+        hsb = ttk.Scrollbar(container, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        container.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+
+        tree.heading("group", text="Group"); tree.column("group", width=130, anchor="w")
+        tree.heading("sample", text="Sample"); tree.column("sample", width=240, anchor="w")
+        tree.heading("pg", text="PG"); tree.column("pg", width=90, anchor="e")
+        for i, lab in enumerate(prec_labels):
+            tree.heading(f"p{i}", text=lab)
+            tree.column(f"p{i}", width=130, anchor="e")
+
+        for grp, col in sample_info:
+            pg_val = df.loc[pg].get(col)
+            prec_vals = [self._fmt_val(prec.iloc[i].get(col)) for i in range(len(prec))]
+            tree.insert("", "end", values=[grp, self._short_sample(col), self._fmt_val(pg_val)] + prec_vals)
+
     # ----- data file browsing -----
     def _browse_pg(self):
         path = filedialog.askopenfilename(
@@ -1087,7 +1234,7 @@ class VolcanoGUI(tk.Tk):
 
     def _output_dir_for(self, pg_path):
         workdir = os.path.dirname(os.path.abspath(pg_path))
-        return os.path.join(workdir, _stem_from_pg(pg_path) + "_outputs")
+        return os.path.join(workdir, "proteomics_GUI_output")
 
     def _update_path_label(self):
         pg = self.cfg_vars["pg_path"].get().strip()
@@ -1153,7 +1300,8 @@ class VolcanoGUI(tk.Tk):
             self._log_fh = open(log_path, "w", encoding="utf-8")
         except Exception:
             self._log_fh = None
-        for b in (self.run_btn, self.preview_btn, self.plot_all_btn, self.plot_btn, self.pca_btn, self.bubble_btn):
+        for b in (self.run_btn, self.preview_btn, self.plot_all_btn, self.plot_btn,
+                  self.pca_btn, self.bubble_btn, self.lookup_btn):
             b.configure(state="disabled")
         self.status.configure(text="Running...", foreground="#a60")
         log = logging.getLogger()
@@ -1169,7 +1317,7 @@ class VolcanoGUI(tk.Tk):
         # the rules persist in this context, then run each worker inside a COPY of
         # it so every run sees them.
         try:
-            from diann_pipeline.stats import _ensure_r
+            from scripts.stats import _ensure_r
             _ensure_r()
         except Exception:
             pass  # a genuine R/limma error will be logged by the worker
@@ -1221,7 +1369,11 @@ class VolcanoGUI(tk.Tk):
             self._sar_text.delete("1.0", "end")
             self._sar_text.insert("1.0", ": " + ", ".join(treatments))
             self.bub_vars["sar_suffix"].set("_vs_" + cfg.reference_group)
-            for b in (self.plot_all_btn, self.plot_btn, self.pca_btn, self.bubble_btn):
+            # Raw-data lookup: offer the comparisons (or all samples).
+            comps = list(payload.imputed_dataframes.keys())
+            self.lookup_comp.configure(values=comps + ["All samples"])
+            self.lookup_comp.set(comps[0] if comps else "All samples")
+            for b in (self.plot_all_btn, self.plot_btn, self.pca_btn, self.bubble_btn, self.lookup_btn):
                 b.configure(state="normal")
             self.status.configure(text="Analysis complete", foreground="#080")
             # By default, generate volcanoes for ALL comparisons right away.
