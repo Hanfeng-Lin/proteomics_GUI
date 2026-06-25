@@ -6,8 +6,8 @@ that used to rely on globals:
 * ``df``, ``group_columns``, ``imputation_dict`` and ``config`` are passed in.
 * ``mode`` / ``imputation_option`` / ``PharosTCRD`` keep their override-able
   keyword form but default to the corresponding ``config`` value (the notebook
-  defaulted them from the global settings); ``limma_option`` and
-  ``output_adjPval`` are read from ``config``.
+  defaulted them from the global settings); ``output_adjPval`` is read from
+  ``config``.
 * The annotation lists (Tclin/Tchem/..., kinase/ubiquitin/loop lists) are
   imported at module scope so the body can reference them by their bare names,
   exactly as before.
@@ -50,7 +50,6 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
         imputation_option = config.imputation_option
     if PharosTCRD is None:
         PharosTCRD = config.pharos_tcrd
-    limma_option = config.limma_option
     output_adjPval = config.output_adjpval
 
     logFC="log2FC_"+treatment_group+"_vs_"+control_group
@@ -227,10 +226,10 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
     else:
         plt.ylim(0, y_max*(1+top_buffer))
     plt.xlabel(logFC, labelpad=10, size=axis_label_fontsize)
-    if limma_option and output_adjPval:
+    if output_adjPval:
         plt.ylabel("-log(adjusted P value)", labelpad=10, size=axis_label_fontsize)
     else:
-        plt.ylabel("-logFDR", labelpad=10, size=axis_label_fontsize)
+        plt.ylabel("-log(P value)", labelpad=10, size=axis_label_fontsize)
     plt.title(logFC.split("_", maxsplit=1)[1]+"\nn="+str(len(df[FDR].dropna())),size=title_fontsize)
     if logFC_cutoff2:
         plt.axvline(-logFC_cutoff2,color="grey",linestyle="--")

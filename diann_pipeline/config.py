@@ -15,8 +15,10 @@ Field name -> original notebook global:
     imputation_option               -> imputation_option
     normalization_protein_id        -> NORMALIZATION_PROTEIN_ID
     pharos_tcrd                     -> PharosTCRD
-    limma_option                    -> limma_option
     output_adjpval                  -> output_adjPval
+
+Statistics are limma-only (the notebook's Student's t-test fallback was removed),
+so there is no longer a ``limma_option`` field.
 """
 
 from dataclasses import dataclass, field
@@ -46,9 +48,7 @@ class AnalysisConfig:
     normalization_protein_id: str = ""
     # Colour the proteome by Pharos TCRD class (Tclin/Tchem/Tbio/Tdark).
     pharos_tcrd: bool = False
-    # Use R-limma for statistics (needs R + R_HOME + limma). False => Student t-test + BH.
-    limma_option: bool = True
-    # Output adjusted p-value (FDR) instead of raw p-value.
+    # Plot the adjusted p-value (FDR) on the volcano instead of the raw limma p-value.
     output_adjpval: bool = True
     # Optional explicit input paths. If set, they override the `file` stem when
     # loading -- lets a caller (e.g. the GUI file browser) load matrices from any

@@ -249,7 +249,6 @@ def build_config(v):
         imputation_option=bool(v["imputation_option"]),
         normalization_protein_id=str(v["normalization_protein_id"]).strip(),
         pharos_tcrd=False,  # volcano-only display option; controlled on the Volcano tab
-        limma_option=bool(v["limma_option"]),
         output_adjpval=bool(v["output_adjpval"]),
         pg_path=pg,
         pr_path=pr,
@@ -745,11 +744,11 @@ class VolcanoGUI(tk.Tk):
         v["imputation_option"] = check(checks, 0, "Imputation", True,
                                        hint="Impute missing values (treated and reference groups). "
                                             "Off = use raw values only; proteins with too few valid values are dropped.")
-        v["limma_option"] = check(checks, 1, "Use limma (needs R)", True,
-                                  hint="Use R/limma for differential stats (needs R + R_HOME + the limma package). "
-                                       "Off = Student's t-test with Benjamini-Hochberg FDR.")
-        v["output_adjpval"] = check(checks, 2, "Output adjusted P", True,
-                                    hint="Report adjusted P-values (FDR) instead of raw P-values (limma only).")
+        v["output_adjpval"] = check(checks, 1, "Plot adjusted P (FDR)", True,
+                                    hint="Use the adjusted P-value (BH/FDR) on the volcano y-axis. "
+                                         "Off = use the raw limma p-value. Both are written to the CSV either way.")
+        ttk.Label(checks, text="Statistics: R/limma moderated t-test (requires R + R_HOME + limma).",
+                  foreground="#666").grid(row=2, column=0, columnspan=3, sticky="w", padx=4, pady=(4, 0))
         # Pharos TCRD is purely a volcano-plot coloring option -- it lives on the
         # Volcano tab (Highlights), not here, since it doesn't affect the analysis.
 
@@ -1169,12 +1168,11 @@ class VolcanoGUI(tk.Tk):
         # one-time activate() is skipped). Initialise R here on the main thread so
         # the rules persist in this context, then run each worker inside a COPY of
         # it so every run sees them.
-        if cfg.limma_option:
-            try:
-                from diann_pipeline.stats import _ensure_r
-                _ensure_r()
-            except Exception:
-                pass  # a genuine R/limma error will be logged by the worker
+        try:
+            from diann_pipeline.stats import _ensure_r
+            _ensure_r()
+        except Exception:
+            pass  # a genuine R/limma error will be logged by the worker
         ctx = contextvars.copy_context()
         threading.Thread(target=ctx.run, args=(self._run_worker, cfg), daemon=True).start()
 

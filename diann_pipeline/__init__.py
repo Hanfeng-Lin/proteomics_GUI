@@ -28,15 +28,12 @@ from .imputation import (
     calculate_average_FC_value,
 )
 from .stats import (
-    student_t_test,
-    apply_bh_fdr,
     limma_differential_analysis,
     empirical_fdr_curve,
 )
 from .pipeline import (
     AnalysisResult,
     run_workflow,
-    run_ttest,
     run_limma,
     run_core,
 )
@@ -50,12 +47,9 @@ __all__ = [
     "imputation",
     "normalize_by_specific_protein",
     "calculate_average_FC_value",
-    "student_t_test",
-    "apply_bh_fdr",
     "limma_differential_analysis",
     "empirical_fdr_curve",
     "run_workflow",
-    "run_ttest",
     "run_limma",
     "run_core",
 ]

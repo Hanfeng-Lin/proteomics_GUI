@@ -1,15 +1,14 @@
-"""Pipeline orchestration (notebook cells 7, 8, 9).
+"""Pipeline orchestration (notebook cells 7 and 9).
 
 These were the bare procedural cells that mutated globals (``imputed_dataframes``,
 ``imputation_dict``, ``df_final_results``). Here each becomes a function that
 takes its inputs explicitly and returns its outputs. ``AnalysisResult`` bundles
 the state the plotting functions need, replacing the global namespace.
 
-The control flow, file outputs and column construction are identical to the
-notebook: ``run_workflow`` (impute + normalize + FC + Excel), then
-``run_ttest`` (always writes ``*_with_ttest.csv``; computes t-tests only when
-limma is off), then ``run_limma`` (limma when enabled). This matches the
-top-to-bottom order in which cells 7 -> 8 -> 9 executed.
+``run_workflow`` (impute + normalize + fold change + Excel) then ``run_limma``
+(differential statistics via R/limma -- a moderated t-test). The Student's
+t-test fallback from the original notebook has been removed: statistics are
+limma-only.
 """
 
 import logging
@@ -25,7 +24,7 @@ from .imputation import (
     normalize_by_specific_protein,
     calculate_average_FC_value,
 )
-from .stats import student_t_test, apply_bh_fdr, limma_differential_analysis
+from .stats import limma_differential_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -161,62 +160,25 @@ def run_workflow(config, df_original, df_peptide, group_columns, save_excel=True
 
 
 # --------------------------------------------------------------------------- #
-# cell 8: Student's t-test (only when limma is disabled; csv always written)
-# --------------------------------------------------------------------------- #
-def run_ttest(config, imputed_dataframes, df_final_results, group_columns, save_csv=True):
-    if not config.limma_option:
-        print("Running Student's t-test for each comparison...")
-        for comparison_name, imputed_df in imputed_dataframes.items():
-            treated_name, control_name = comparison_name.split('_vs_')
-
-            pvalue_column_name = f'Pvalue_{comparison_name}'
-            p_values = imputed_df.apply(
-                student_t_test,
-                axis=1,
-                treated_group_name=treated_name,
-                control_group_name=control_name,
-                group_columns=group_columns,
-                imputation_option=config.imputation_option,
-            )
-
-            bhFDR_column_name = f'bh_FDR_{comparison_name}'
-            fdr_values = apply_bh_fdr(p_values)
-
-            df_final_results[pvalue_column_name] = p_values
-            df_final_results[bhFDR_column_name] = fdr_values
-
-        print("T-test analysis complete.")
-    else:
-        print("Skipping Student's t-test because limma_option is enabled.")
-
-    if save_csv:
-        df_final_results.to_csv("final_analysis_summary_with_ttest.csv", index=False)
-    return df_final_results
-
-
-# --------------------------------------------------------------------------- #
-# cell 9: limma (only when enabled)
+# cell 9: limma (moderated t-test; the only statistics path)
 # --------------------------------------------------------------------------- #
 def run_limma(config, imputed_dataframes, df_final_results, group_columns, save_csv=True):
-    if config.limma_option:
-        for comparison_name, imputed_df in imputed_dataframes.items():
-            print(f"Running Limma for: {comparison_name}...")
-            treated_name, control_name = comparison_name.split('_vs_')
+    for comparison_name, imputed_df in imputed_dataframes.items():
+        print(f"Running Limma for: {comparison_name}...")
+        treated_name, control_name = comparison_name.split('_vs_')
 
-            limma_results_df = limma_differential_analysis(
-                imputed_df, treated_name, control_name, group_columns, config.output_adjpval
+        limma_results_df = limma_differential_analysis(
+            imputed_df, treated_name, control_name, group_columns, config.output_adjpval
+        )
+
+        if not limma_results_df.empty:
+            df_final_results = df_final_results.merge(
+                limma_results_df, left_index=True, right_index=True, how="left"
             )
 
-            if not limma_results_df.empty:
-                df_final_results = df_final_results.merge(
-                    limma_results_df, left_index=True, right_index=True, how="left"
-                )
-
-        if save_csv:
-            df_final_results.to_csv("final_analysis_summary_with_limma.csv", index=False)
-        print("\nLimma analysis complete. Final summary has been updated.")
-    else:
-        print("limma_option not enabled")
+    if save_csv:
+        df_final_results.to_csv("final_analysis_summary_with_limma.csv", index=False)
+    print("\nLimma analysis complete. Final summary has been updated.")
     return df_final_results
 
 
@@ -224,10 +186,8 @@ def run_limma(config, imputed_dataframes, df_final_results, group_columns, save_
 # Convenience: load -> group -> clean-up -> workflow -> stats
 # --------------------------------------------------------------------------- #
 def run_core(config: Optional[AnalysisConfig] = None, contaminants=None, save_outputs=True) -> AnalysisResult:
-    """Run the full core pipeline (cells 2,3,5,7,8,9) and return an AnalysisResult.
-
-    Matches the notebook's execution order exactly: t-test stage runs (and writes
-    its CSV) before the limma stage, just as cells 8 and 9 did.
+    """Run the full core pipeline (load -> group -> clean-up -> impute/FC -> limma)
+    and return an AnalysisResult.
     """
     if config is None:
         config = AnalysisConfig()
@@ -241,7 +201,6 @@ def run_core(config: Optional[AnalysisConfig] = None, contaminants=None, save_ou
     imputed_dataframes, imputation_dict, summary = run_workflow(
         config, df, df_peptide, group_columns, save_excel=save_outputs
     )
-    summary = run_ttest(config, imputed_dataframes, summary, group_columns, save_csv=save_outputs)
     summary = run_limma(config, imputed_dataframes, summary, group_columns, save_csv=save_outputs)
 
     return AnalysisResult(

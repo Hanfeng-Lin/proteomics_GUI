@@ -1,42 +1,17 @@
-"""Differential-statistics: Student t-test + BH (cell 8), limma (cell 9), and
-the empirical-FDR curve used by the volcano plot (cell 10).
+"""Differential-statistics: limma (cell 9) and the empirical-FDR curve used by
+the volcano plot (cell 10).
 
-Bodies are verbatim from the notebook; ``group_columns``, ``imputation_option``
-and ``output_adjpval`` are now explicit arguments. R / rpy2 is initialised
-lazily so that importing this module does not require R unless limma is used.
+limma fits a per-protein linear model (lmFit) and shrinks variances with
+empirical Bayes (eBayes), so its p-value is a *moderated* t-test. ``group_columns``
+and ``output_adjpval`` are explicit arguments; R / rpy2 is initialised lazily.
 """
 
 import logging
 
 import numpy as np
 import pandas as pd
-from scipy.stats import ttest_ind
-from statsmodels.stats.multitest import multipletests
 
 logger = logging.getLogger(__name__)
-
-
-# --------------------------------------------------------------------------- #
-# Student's t-test (notebook cell 8)
-# --------------------------------------------------------------------------- #
-def student_t_test(row, treated_group_name, control_group_name, group_columns,
-                   imputation_option, min_valid_value=3):  # valid value = Not NaN
-    treated_values = pd.to_numeric(row[group_columns[treated_group_name]], errors='coerce').dropna().values
-    control_values = pd.to_numeric(row[group_columns[control_group_name]], errors='coerce').dropna().values
-
-    if not imputation_option:
-        if len(treated_values) < min_valid_value or len(control_values) < min_valid_value:
-            return np.nan
-
-    return ttest_ind(treated_values, control_values, equal_var=True).pvalue
-
-
-# Apply Benjamini-Hochberg FDR correction, handling NaN values
-def apply_bh_fdr(p_values):
-    mask = np.isfinite(p_values)
-    p_values_corrected = np.full(p_values.shape, np.nan)
-    p_values_corrected[mask] = multipletests(p_values[mask], method='fdr_bh')[1]
-    return p_values_corrected
 
 
 # --------------------------------------------------------------------------- #
@@ -98,19 +73,22 @@ def limma_differential_analysis(df, treated_group_name, control_group_name, grou
     r("fit2 <- eBayes(fit2)")
     r("limma_results <- topTable(fit2, adjust='BH', number=Inf, sort.by='none')")
 
-    # Convert results back to pandas
+    # Convert results back to pandas. topTable returns both P.Value (raw,
+    # moderated-t) and adj.P.Val (BH/FDR); we keep both.
     pvalues_df = pandas2ri.rpy2py(r('limma_results'))
-    # Rename columns to be specific to this comparison and return ONLY the new results
     pvalue_column_name = f'bh_FDR_{treated_group_name}_vs_{control_group_name}'
+    raw_p_column_name = f'Pvalue_{treated_group_name}_vs_{control_group_name}'
     log10pvalue_column_name = f'-log_P_adj_{treated_group_name}_vs_{control_group_name}'
 
+    # Always expose the unadjusted (moderated-t) p-value as its own column.
+    pvalues_df[raw_p_column_name] = pvalues_df['P.Value']
     if output_adjpval:
         pvalues_df = pvalues_df.rename(columns={'adj.P.Val': pvalue_column_name})
     else:
         pvalues_df = pvalues_df.rename(columns={'P.Value': pvalue_column_name})
     pvalues_df[log10pvalue_column_name] = -np.log10(pvalues_df[pvalue_column_name])
-    # Return only the columns we need, with the correct index
-    return pvalues_df[[pvalue_column_name, log10pvalue_column_name]]
+    # Return the raw p, the (adjusted) FDR used for plotting, and its -log10.
+    return pvalues_df[[raw_p_column_name, pvalue_column_name, log10pvalue_column_name]]
 
 
 # --------------------------------------------------------------------------- #
