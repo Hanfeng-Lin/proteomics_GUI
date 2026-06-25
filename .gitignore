@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# DIA-NN input matrices — supply your own via the GUI's "Browse..." button
+*.pg_matrix.tsv
+*.pr_matrix.tsv
+
+# Analysis outputs (written to a "<stem>_outputs" folder next to the data)
+*_outputs/
+*_analyzed.csv
+FC_results*.xlsx
+final_analysis_summary*.csv
+Normalized_imputed_data_*.tsv
+temp.csv
+*.png
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

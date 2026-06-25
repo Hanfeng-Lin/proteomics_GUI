@@ -1,0 +1,1108 @@
+"""Desktop GUI for the diann_pipeline proteomics analysis.
+
+Left side is a 3-step notebook:
+  1. Analysis configuration  -> browse pg/pr files, set groups, run run_core()
+     in a background thread (load -> impute -> fold change -> t-test/limma).
+  2. Volcano settings        -> every volcano_plot() parameter; plots all
+     comparisons (one tab each) or a single selected one.
+  3. Bubbleplot settings     -> every bubble_dendro_plot() parameter.
+
+The plot canvas (right) and log (bottom) are shared across the steps. The working
+folder is wherever the chosen pg/pr files live, and all outputs are written to a
+dedicated "<stem>_outputs" folder beside the data.
+
+Nothing in diann_pipeline is modified; the GUI only collects parameters and calls
+the existing functions. Run it with:  python gui.py
+"""
+
+import os
+import sys
+import glob
+import queue
+import logging
+import threading
+import traceback
+
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+
+import matplotlib
+matplotlib.use("Agg")  # figures are embedded manually; no stray windows
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+
+# Make the package importable when running this file directly.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from diann_pipeline import AnalysisConfig, run_core
+from diann_pipeline.plots.volcano import volcano_plot
+from diann_pipeline.plots.pca import generate_pca_plot
+from diann_pipeline.plots.bubble import bubble_dendro_plot
+
+
+# --------------------------------------------------------------------------- #
+# Parsing helpers (pure functions -- testable without a display)
+# --------------------------------------------------------------------------- #
+def _opt_float(s):
+    s = str(s).strip()
+    return None if s == "" else float(s)
+
+
+def _opt_int(s):
+    s = str(s).strip()
+    return None if s == "" else int(float(s))
+
+
+def _req_float(s, default):
+    s = str(s).strip()
+    return default if s == "" else float(s)
+
+
+def _req_int(s, default):
+    s = str(s).strip()
+    return default if s == "" else int(float(s))
+
+
+def _as_float(s, name):
+    s = str(s).strip()
+    if s == "":
+        raise ValueError(f"'{name}' is required")
+    return float(s)
+
+
+def _genes(s):
+    return [x.strip() for x in str(s).split(",") if x.strip()]
+
+
+def _num_pair(s, name):
+    parts = [p.strip() for p in str(s).split(",") if p.strip() != ""]
+    if len(parts) != 2:
+        raise ValueError(f"'{name}' must be two numbers like '1, 3'")
+    return [float(parts[0]), float(parts[1])]
+
+
+def build_volcano_params(v):
+    """Turn a dict of raw widget values into volcano_plot() keyword arguments."""
+    xmin = _as_float(v["xlim_min"], "x-axis min")
+    xmax = _as_float(v["xlim_max"], "x-axis max")
+
+    ymin = str(v["ylim_min"]).strip()
+    ymax = str(v["ylim_max"]).strip()
+    if ymin == "" and ymax == "":
+        ylim = []  # auto y-limits
+    else:
+        ylim = [_as_float(ymin, "y-axis min"), _as_float(ymax, "y-axis max")]
+
+    mode_v = str(v["mode"]).strip().lower()
+    mode = None if mode_v in ("", "auto") else int(float(mode_v))
+
+    return dict(
+        logFC_cutoff=_opt_float(v["logFC_cutoff"]),
+        logFC_cutoff2=_opt_float(v["logFC_cutoff2"]),
+        FDR_cutoff=_req_float(v["FDR_cutoff"], 0.05),
+        use_empirical_fdr=bool(v["use_empirical_fdr"]),
+        mode=mode,
+        fdr_alpha=_req_float(v["fdr_alpha"], 0.05),
+        kappa=_req_float(v["kappa"], 1e-6),
+        p_value_cutoff=_req_float(v["p_value_cutoff"], 1),
+        file_suffix=str(v["file_suffix"]),
+        highlight_genes=_genes(v["highlight_genes"]),
+        protein_level_cutoff=_opt_float(v["protein_level_cutoff"]),
+        xlim=[xmin, xmax],
+        ylim=ylim,
+        x_interval=_req_float(v["x_interval"], 2),
+        y_interval=_req_float(v["y_interval"], 1),
+        top_buffer=_req_float(v["top_buffer"], 0.1),
+        imputation_option=bool(v["imputation_option"]),
+        PharosTCRD=bool(v["PharosTCRD"]),
+        highlight_kinase=bool(v["highlight_kinase"]),
+        highlight_ub=bool(v["highlight_ub"]),
+        highlight_Gloops=bool(v["highlight_Gloops"]),
+        highlight_RTloops=bool(v["highlight_RTloops"]),
+        label_topX_mid_fc=_opt_int(v["label_topX_mid_fc"]),
+        max_label=_req_int(v["max_label"], 100),
+        label_most_extreme=_opt_int(v["label_most_extreme"]),
+    )
+
+
+def build_bubble_params(v):
+    """Turn raw widget values into (SAR dict, bubble_dendro_plot kwargs)."""
+    sar_text = str(v["sar"]).strip()
+    if not sar_text:
+        raise ValueError("Enter at least one SAR group, e.g.:  : Positive_Control, IRAK1")
+    SAR = {}
+    for line in sar_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if ":" in line:
+            label, items = line.split(":", 1)
+        else:
+            label, items = "", line
+        names = [x.strip() for x in items.split(",") if x.strip()]
+        if names:
+            SAR[label.strip()] = names
+    if not SAR:
+        raise ValueError("No valid SAR groups parsed.")
+
+    legend_raw = str(v["legend_num"]).strip()
+    legend_num = "auto" if legend_raw == "" or legend_raw.lower() == "auto" else int(float(legend_raw))
+
+    kwargs = dict(
+        SAR_suffix=str(v["sar_suffix"]),
+        figure_filename=str(v["figure_filename"]).strip() or "bubble_plot.png",
+        fig_title=str(v["fig_title"]),
+        fig_width=_req_float(v["fig_width"], 50),
+        fig_height=_req_float(v["fig_height"], 50),
+        dendro_bubble_height_ratio=_num_pair(v["dendro_bubble_height_ratio"], "dendro/bubble height ratio"),
+        bubble_legend_width_ratio=_num_pair(v["bubble_legend_width_ratio"], "bubble/legend width ratio"),
+        compound_labelsize=_req_float(v["compound_labelsize"], 20),
+        protein_labelsize=_req_float(v["protein_labelsize"], 20),
+        colorFCrange=_num_pair(v["colorFCrange"], "color FC range"),
+        highlight_G_loop=int(float(str(v["highlight_G_loop"]).strip() or 0)),
+        highlight_RT_loop=int(float(str(v["highlight_RT_loop"]).strip() or 0)),
+        rainbow_palette=1 if bool(v["rainbow_palette"]) else 0,
+        invert_xy=bool(v["invert_xy"]),
+        selected_genes=_genes(v["selected_genes"]),
+        legend_num=legend_num,
+    )
+    return SAR, kwargs
+
+
+def _stem_from_pg(path):
+    """Derive the DIA-NN run stem from a *.pg_matrix.tsv path (or any file)."""
+    name = os.path.basename(path)
+    for suffix in (".pg_matrix.tsv", ".pr_matrix.tsv", ".tsv"):
+        if name.lower().endswith(suffix):
+            return name[: -len(suffix)]
+    return os.path.splitext(name)[0]
+
+
+def build_config(v):
+    """Build an AnalysisConfig from the config-tab widget values.
+
+    Inputs are the browsed pg/pr file paths; the working folder is wherever the
+    pg file lives. Raises ValueError (with a human message) on bad input.
+    """
+    groups = [g.strip() for g in str(v["group_names"]).split(",") if g.strip()]
+
+    comp_raw = str(v["comparison_matrix"]).strip()
+    if comp_raw == "":
+        comparison_matrix = ()  # blank => all groups vs the reference group
+    else:
+        comparison_matrix = []
+        for pair in comp_raw.split(","):
+            if ":" not in pair:
+                raise ValueError(f"Comparison '{pair.strip()}' must be 'treated:control'")
+            t, c = pair.split(":", 1)
+            comparison_matrix.append([t.strip(), c.strip()])
+        comparison_matrix = tuple(comparison_matrix)
+
+    pg = str(v.get("pg_path", "")).strip()
+    pr = str(v.get("pr_path", "")).strip()
+    if not pg:
+        raise ValueError("Select a protein (pg_matrix.tsv) file with 'Browse...'.")
+    if not pr:
+        raise ValueError("Select a precursor (pr_matrix.tsv) file with 'Browse...'.")
+    pg = os.path.abspath(pg)
+    pr = os.path.abspath(pr)
+    if not os.path.exists(pg):
+        raise ValueError(f"pg_matrix file not found:\n{pg}")
+    if not os.path.exists(pr):
+        raise ValueError(f"pr_matrix file not found:\n{pr}")
+
+    return AnalysisConfig(
+        mode=int(float(str(v["mode"]).strip() or 0)),
+        file=_stem_from_pg(pg),
+        group_names=groups,
+        reference_group=str(v["reference_group"]).strip(),
+        comparison_matrix=comparison_matrix,
+        control_group_detection_threshold=float(str(v["control_threshold"]).strip() or 0.5),
+        imputation_option=bool(v["imputation_option"]),
+        normalization_protein_id=str(v["normalization_protein_id"]).strip(),
+        pharos_tcrd=bool(v["pharos_tcrd"]),
+        limma_option=bool(v["limma_option"]),
+        output_adjpval=bool(v["output_adjpval"]),
+        pg_path=pg,
+        pr_path=pr,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Log plumbing
+# --------------------------------------------------------------------------- #
+class _QueueWriter:
+    """File-like object that funnels writes into a queue (for stdout capture)."""
+    def __init__(self, q):
+        self.q = q
+
+    def write(self, s):
+        if s:
+            self.q.put(s)
+
+    def flush(self):
+        pass
+
+
+class _QueueLogHandler(logging.Handler):
+    def __init__(self, q):
+        super().__init__()
+        self.q = q
+
+    def emit(self, record):
+        try:
+            self.q.put(self.format(record) + "\n")
+        except Exception:
+            pass
+
+
+# --------------------------------------------------------------------------- #
+# Small widget helpers
+# --------------------------------------------------------------------------- #
+def labeled_entry(parent, row, label, default="", width=14, tip=None):
+    ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
+    var = tk.StringVar(value=str(default))
+    ttk.Entry(parent, textvariable=var, width=width).grid(row=row, column=1, sticky="w", padx=4, pady=2)
+    if tip:
+        ttk.Label(parent, text=tip, foreground="#666").grid(row=row, column=2, sticky="w", padx=4)
+    return var
+
+
+def check(parent, row, label, default=False):
+    var = tk.BooleanVar(value=default)
+    ttk.Checkbutton(parent, text=label, variable=var).grid(
+        row=row, column=0, columnspan=3, sticky="w", padx=4, pady=1)
+    return var
+
+
+def path_row(parent, row, label, browse_cmd, width=32):
+    """A row with a label, a path entry, and a Browse button."""
+    ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
+    var = tk.StringVar()
+    ttk.Entry(parent, textvariable=var, width=width).grid(row=row, column=1, sticky="w", padx=4, pady=2)
+    ttk.Button(parent, text="Browse...", command=browse_cmd).grid(row=row, column=2, sticky="w", padx=4)
+    return var
+
+
+_DELIMS = set("_-./ :|\\\t")
+
+
+def _uniq(vals):
+    """Order-preserving unique, trimming whitespace and dropping empties."""
+    seen, out = set(), []
+    for v in vals:
+        v = v.strip()
+        if v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def _longest_common_substring(strings):
+    """Longest substring (>= 2 chars) present in every string; '' if none."""
+    if not strings:
+        return ""
+    shortest = min(strings, key=len)
+    n = len(shortest)
+    for length in range(n, 1, -1):
+        for start in range(0, n - length + 1):
+            sub = shortest[start:start + length]
+            if all(sub in s for s in strings):
+                return sub
+    return ""
+
+
+def _decompose(cores, depth=0):
+    """Recursively split aligned strings on their consensus substrings.
+
+    Returns an ordered list of tokens: ('anchor', str) for each constant region
+    shared by all samples, and ('seg', [values]) for the variable segments in
+    between. Handles MULTIPLE consensus regions (e.g. '..._Target_..._Tech_...'),
+    so every variable field becomes its own segment.
+    """
+    anchor = _longest_common_substring(cores) if depth < 30 else ""
+    if not anchor or len(anchor) < 2:
+        return [("seg", list(cores))]
+    left, right = [], []
+    for c in cores:
+        i = c.find(anchor)
+        left.append(c[:i])
+        right.append(c[i + len(anchor):])
+    return _decompose(left, depth + 1) + [("anchor", anchor)] + _decompose(right, depth + 1)
+
+
+def group_candidates(sample_cols):
+    """Propose group-name schemes from sample column headers.
+
+    Returns (prefix, suffix, anchors, candidates):
+      - anchors    : every consensus region shared by all sample names.
+      - candidates : list of (description, [group names]), variable fields in
+        header order first (earlier fields, usually the compound, ranked first),
+        then a delimiter fallback. Handles MULTIPLE consensus regions and group
+        names that contain the delimiter (e.g. 'Positive_Control').
+    """
+    cols = list(sample_cols)
+    prefix = os.path.commonprefix(cols)
+    suffix = os.path.commonprefix([c[::-1] for c in cols])[::-1]
+    # Trim the common prefix/suffix back to a delimiter boundary so we never eat
+    # into a shared name token (e.g. 'DrugA'/'DrugB' -> keep 'Drug', strip './').
+    last_delim = max([i for i, ch in enumerate(prefix) if ch in _DELIMS], default=-1)
+    prefix = prefix[:last_delim + 1]
+    first_delim = next((i for i, ch in enumerate(suffix) if ch in _DELIMS), None)
+    suffix = suffix[first_delim:] if first_delim is not None else ""
+    cores = [c[len(prefix): len(c) - len(suffix)] if suffix else c[len(prefix):] for c in cols]
+
+    tokens = _decompose(cores)
+    anchors = [t[1] for t in tokens if t[0] == "anchor" and t[1].strip()]
+
+    raw = []  # (priority, description, groups)
+    pos = 0
+    for idx, t in enumerate(tokens):
+        if t[0] != "seg":
+            continue
+        vals = _uniq(t[1])
+        if len(vals) <= 1:  # constant or empty segment -> part of the consensus
+            continue
+        nxt = next((tokens[j][1] for j in range(idx + 1, len(tokens)) if tokens[j][0] == "anchor"), "")
+        prv = next((tokens[j][1] for j in range(idx - 1, -1, -1) if tokens[j][0] == "anchor"), "")
+        if nxt:
+            desc = f"Field {pos + 1} (before '{nxt}')"
+        elif prv:
+            desc = f"Field {pos + 1} (after '{prv}')"
+        else:
+            desc = f"Field {pos + 1}"
+        raw.append((pos, desc, vals))
+        pos += 1
+
+    # Delimiter fallback (lower priority) for names with no usable consensus.
+    for delim in ("_", "-", "."):
+        if not any(delim in core for core in cores):
+            continue
+        first = _uniq([core.split(delim, 1)[0] for core in cores])
+        if 1 < len(first):
+            raw.append((100, f"First part before '{delim}'", first))
+
+    # Dedup by group set, keeping the best (lowest-priority) description.
+    best = {}
+    for pri, desc, g in raw:
+        key = tuple(sorted(g))
+        if key not in best or pri < best[key][0]:
+            best[key] = (pri, desc, g)
+    ranked = sorted(best.values(), key=lambda x: x[0])
+    return prefix, suffix, anchors, [(desc, g) for _, desc, g in ranked]
+
+
+class GroupPickerDialog(tk.Toplevel):
+    """Popup showing the header consensus and candidate group fields to choose."""
+    def __init__(self, parent, sample_cols, apply_cb):
+        super().__init__(parent)
+        self.title("Auto-pick group names")
+        self.geometry("680x500")
+        self.minsize(560, 360)
+        self.apply_cb = apply_cb
+        self.transient(parent)
+
+        prefix, suffix, anchors, self.cands = group_candidates(sample_cols)
+        anchors_str = "   |   ".join(f"'{a}'" for a in anchors) if anchors else "(none)"
+        info = (f"{len(sample_cols)} sample columns detected.\n"
+                f"Common prefix:  '{prefix}'\n"
+                f"Common suffix:  '{suffix}'\n"
+                f"Consensus regions:  {anchors_str}")
+        ttk.Label(self, text=info, justify="left", foreground="#444").pack(anchor="w", padx=10, pady=8)
+        ttk.Label(self, text="Choose which field defines your groups:").pack(anchor="w", padx=10)
+
+        # Reserve the button bar at the bottom FIRST so it is always visible,
+        # then let the body fill the space above it.
+        btns = ttk.Frame(self)
+        btns.pack(side="bottom", fill="x", padx=10, pady=8)
+        ttk.Button(btns, text="Use selected", command=self._use).pack(side="right", padx=4)
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="right", padx=4)
+
+        body = ttk.Frame(self)
+        body.pack(side="top", fill="both", expand=True, padx=10, pady=6)
+        left = ttk.Frame(body)
+        left.pack(side="left", fill="both", expand=True)
+        self.lb = tk.Listbox(left, height=10, exportselection=False)
+        for desc, g in self.cands:
+            self.lb.insert("end", f"{desc}   ->   {len(g)} groups")
+        self.lb.pack(side="left", fill="both", expand=True)
+        lsb = ttk.Scrollbar(left, command=self.lb.yview)
+        lsb.pack(side="left", fill="y")
+        self.lb.configure(yscrollcommand=lsb.set)
+        self.lb.bind("<<ListboxSelect>>", self._on_select)
+
+        prev = ttk.LabelFrame(body, text="Resulting groups")
+        prev.pack(side="left", fill="both", expand=True, padx=(8, 0))
+        self.preview = tk.Text(prev, width=28, wrap="word", state="disabled")
+        self.preview.pack(fill="both", expand=True)
+
+        if self.cands:
+            self.lb.selection_set(0)
+            self._on_select()
+        else:
+            self._set_preview("No varying fields found in the sample names.")
+        self.grab_set()
+
+    def _set_preview(self, text):
+        self.preview.configure(state="normal")
+        self.preview.delete("1.0", "end")
+        self.preview.insert("end", text)
+        self.preview.configure(state="disabled")
+
+    def _current(self):
+        sel = self.lb.curselection()
+        return self.cands[sel[0]] if sel else None
+
+    def _on_select(self, event=None):
+        c = self._current()
+        self._set_preview("\n".join(c[1]) if c else "")
+
+    def _use(self):
+        c = self._current()
+        if c:
+            self.apply_cb(", ".join(c[1]))
+            self.destroy()
+
+
+class ScrollableFrame(ttk.Frame):
+    """A vertically scrollable frame; put widgets in `.inner`."""
+    def __init__(self, parent, width=460, **kw):
+        super().__init__(parent, **kw)
+        self.canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0, width=width)
+        vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.inner = ttk.Frame(self.canvas)
+        self._win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._win, width=e.width))
+        self.canvas.bind_all("<MouseWheel>", self._on_wheel)
+
+    def _on_wheel(self, event):
+        self.canvas.yview_scroll(int(-event.delta / 120), "units")
+
+
+# --------------------------------------------------------------------------- #
+# Main application
+# --------------------------------------------------------------------------- #
+class VolcanoGUI(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("DIA-NN Proteomics  -  Volcano / Bubble Explorer")
+        self.geometry("1360x900")
+
+        self.result = None      # AnalysisResult after a run
+        self.cfg = None
+        self.cfg_vars = {}
+        self.pca_vars = {}
+        self.vol_vars = {}
+        self.bub_vars = {}
+        self._sar_text = None
+        self._plot_canvas = None
+        self.output_dir = None   # dedicated outputs folder under the data folder
+
+        self.log_q = queue.Queue()
+        self.result_q = queue.Queue()
+
+        self._build_ui()
+        self._setup_logging()
+        self._prefill_sample_data()
+
+        self.after(120, self._drain_log)
+        self.after(150, self._poll_result)
+
+    # ----- logging -----
+    def _setup_logging(self):
+        handler = _QueueLogHandler(self.log_q)
+        handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
+        root = logging.getLogger()
+        root.setLevel(logging.INFO)
+        root.addHandler(handler)
+
+    def _drain_log(self):
+        try:
+            while True:
+                msg = self.log_q.get_nowait()
+                self.log_text.configure(state="normal")
+                self.log_text.insert("end", msg)
+                self.log_text.see("end")
+                self.log_text.configure(state="disabled")
+        except queue.Empty:
+            pass
+        self.after(120, self._drain_log)
+
+    # ----- overall layout: notebook (left) + plot (right) + log (bottom) -----
+    def _build_ui(self):
+        main = ttk.PanedWindow(self, orient="horizontal")
+        main.pack(side="top", fill="both", expand=True, padx=8, pady=(8, 4))
+
+        nb = ttk.Notebook(main)
+        main.add(nb, weight=0)
+        cfg_tab = ttk.Frame(nb)
+        pca_tab = ttk.Frame(nb)
+        vol_tab = ttk.Frame(nb)
+        bub_tab = ttk.Frame(nb)
+        nb.add(cfg_tab, text="1. Analysis configuration")
+        nb.add(pca_tab, text="2. PCA")
+        nb.add(vol_tab, text="3. Volcano settings")
+        nb.add(bub_tab, text="4. Bubbleplot settings")
+        self._build_config_tab(cfg_tab)
+        self._build_pca_tab(pca_tab)
+        self._build_volcano_tab(vol_tab)
+        self._build_bubble_tab(bub_tab)
+
+        right = ttk.LabelFrame(main, text="Plot")
+        main.add(right, weight=1)
+        self.plot_container = ttk.Frame(right)
+        self.plot_container.pack(side="top", fill="both", expand=True)
+        ttk.Label(self.plot_container,
+                  text="Run an analysis (tab 1), then plot from tab 2 or 3.",
+                  foreground="#888").pack(expand=True)
+
+        logf = ttk.LabelFrame(self, text="Log")
+        logf.pack(side="bottom", fill="both", padx=8, pady=6)
+        self.log_text = tk.Text(logf, height=7, wrap="word", state="disabled")
+        sb = ttk.Scrollbar(logf, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.log_text.pack(side="left", fill="both", expand=True)
+
+    def _scroll_inner(self, tab):
+        sf = ScrollableFrame(tab, width=470)
+        sf.pack(side="top", fill="both", expand=True)
+        return sf.inner
+
+    # ----- tab 1: analysis configuration -----
+    def _build_config_tab(self, tab):
+        bar = ttk.Frame(tab)
+        bar.pack(side="bottom", fill="x", padx=4, pady=6)
+        self.run_btn = ttk.Button(bar, text="Run analysis", command=self._on_run)
+        self.run_btn.pack(side="left", padx=4)
+        self.preview_btn = ttk.Button(bar, text="Preview groups", command=self._preview_groups)
+        self.preview_btn.pack(side="left", padx=4)
+        self.status = ttk.Label(bar, text="Not run yet", foreground="#a60")
+        self.status.pack(side="left", padx=8)
+
+        gframe = ttk.LabelFrame(tab, text="Group assignments (samples matched per group)")
+        gframe.pack(side="bottom", fill="both", padx=4, pady=4)
+        self._group_text = tk.Text(gframe, height=9, wrap="none", state="disabled")
+        gsb = ttk.Scrollbar(gframe, command=self._group_text.yview)
+        self._group_text.configure(yscrollcommand=gsb.set)
+        gsb.pack(side="right", fill="y")
+        self._group_text.pack(side="left", fill="both", expand=True)
+
+        inner = self._scroll_inner(tab)
+        grid = ttk.Frame(inner)
+        grid.pack(fill="x", padx=4, pady=4)
+
+        v = self.cfg_vars
+        v["pg_path"] = path_row(grid, 0, "Protein file (.pg_matrix.tsv)", self._browse_pg)
+        v["pr_path"] = path_row(grid, 1, "Precursor file (.pr_matrix.tsv)", self._browse_pr)
+        self.path_label = ttk.Label(grid, text="No data selected.", foreground="#555", wraplength=440, justify="left")
+        self.path_label.grid(row=2, column=0, columnspan=3, sticky="w", padx=4, pady=(0, 6))
+        ttk.Label(grid, text="Groups (comma)").grid(row=3, column=0, sticky="w", padx=4, pady=2)
+        v["group_names"] = tk.StringVar(value="DMSO, Positive_Control, IRAK1")
+        ttk.Entry(grid, textvariable=v["group_names"], width=34).grid(row=3, column=1, sticky="w", padx=4, pady=2)
+        ttk.Button(grid, text="Auto-pick...", command=self._autopick_groups).grid(row=3, column=2, sticky="w", padx=4)
+        v["reference_group"] = labeled_entry(grid, 4, "Reference group", "DMSO", width=18)
+        v["comparison_matrix"] = labeled_entry(grid, 5, "Comparisons", "", width=34,
+                                               tip="blank = all vs reference")
+        ttk.Label(grid, text="(format: treated:control, comma-separated)", foreground="#666").grid(
+            row=6, column=1, columnspan=2, sticky="w", padx=4)
+        v["mode"] = labeled_entry(grid, 7, "Mode (0/1)", "0", width=6, tip="0 = degradation, 1 = enrichment")
+        v["control_threshold"] = labeled_entry(grid, 8, "Ctrl detect thresh", "0.5", width=6)
+        v["normalization_protein_id"] = labeled_entry(grid, 9, "Normalize to UniProt", "", width=16, tip="blank = none")
+
+        checks = ttk.Frame(inner)
+        checks.pack(fill="x", padx=4, pady=6)
+        v["imputation_option"] = check(checks, 0, "Imputation", True)
+        v["limma_option"] = check(checks, 1, "Use limma (needs R)", True)
+        v["output_adjpval"] = check(checks, 2, "Output adjusted P", True)
+        v["pharos_tcrd"] = check(checks, 3, "Pharos TCRD colors", False)
+
+    def _set_group_text(self, group_columns):
+        """Fill the dedicated group-assignments box with per-group sample counts."""
+        self._group_text.configure(state="normal")
+        self._group_text.delete("1.0", "end")
+        if not group_columns:
+            self._group_text.insert("end", "No groups matched any sample columns.\n")
+        else:
+            total = sum(len(c) for c in group_columns.values())
+            self._group_text.insert("end", f"{len(group_columns)} groups, {total} samples matched:\n\n")
+            for grp, cols in group_columns.items():
+                self._group_text.insert("end", f"{grp}: {len(cols)}\n")
+                for c in cols:
+                    self._group_text.insert("end", f"    {c}\n")
+        self._group_text.configure(state="disabled")
+
+    def _autopick_groups(self):
+        """Open a popup to pick group names from the pg matrix header columns."""
+        pg = self.cfg_vars["pg_path"].get().strip()
+        if not pg or not os.path.exists(pg):
+            messagebox.showerror("Auto-pick groups", "Select a valid pg_matrix.tsv file first.")
+            return
+        try:
+            import pandas as pd
+            cols = list(pd.read_csv(pg, sep="\t", index_col=0, nrows=0).columns)
+        except Exception:
+            self.log_q.put(traceback.format_exc() + "\n")
+            messagebox.showerror("Auto-pick groups", "Could not read the file header. See the Log.")
+            return
+        meta = {"Protein.Group", "Protein.Ids", "Protein.Names", "Genes", "First.Protein.Description"}
+        samples = [c for c in cols if c not in meta]
+        if len(samples) < 2:
+            messagebox.showinfo("Auto-pick groups", "Not enough sample columns to analyze.")
+            return
+        GroupPickerDialog(self, samples, lambda s: self.cfg_vars["group_names"].set(s))
+
+    def _preview_groups(self):
+        """Compute group assignments from the pg file's columns, without running."""
+        pg = self.cfg_vars["pg_path"].get().strip()
+        if not pg or not os.path.exists(pg):
+            messagebox.showerror("Preview groups", "Select a valid pg_matrix.tsv file first.")
+            return
+        groups = [g.strip() for g in self.cfg_vars["group_names"].get().split(",") if g.strip()]
+        if not groups:
+            messagebox.showerror("Preview groups", "Enter at least one group name.")
+            return
+        try:
+            import pandas as pd
+            from diann_pipeline.io import assign_groups
+            df0 = pd.read_csv(pg, sep="\t", index_col=0, nrows=0)  # header only
+            self._set_group_text(assign_groups(df0, groups))
+            logging.getLogger().info("Previewed group assignments from %s", os.path.basename(pg))
+        except Exception:
+            self.log_q.put(traceback.format_exc() + "\n")
+            messagebox.showerror("Preview groups", "Could not read columns. See the Log.")
+
+    # ----- tab 2: PCA -----
+    def _build_pca_tab(self, tab):
+        bar = ttk.Frame(tab)
+        bar.pack(side="bottom", fill="x", padx=4, pady=6)
+        self.pca_btn = ttk.Button(bar, text="Plot PCA", command=self._on_plot_pca, state="disabled")
+        self.pca_btn.pack(side="left", padx=4)
+
+        inner = self._scroll_inner(tab)
+        box = ttk.LabelFrame(inner, text="PCA options")
+        box.pack(fill="x", padx=4, pady=4)
+        p = self.pca_vars
+        p["title"] = labeled_entry(box, 0, "Title", "PCA plot", width=26)
+        p["filename"] = labeled_entry(box, 1, "Output filename", "PCA_plot.png", width=26)
+        p["text"] = check(box, 2, "Label samples on the plot", True)
+        ttk.Label(inner,
+                  text="PCA uses every sample across all groups; missing values are\n"
+                       "mean-imputed per protein (as in the original analysis). It does\n"
+                       "not depend on the volcano/bubble settings.",
+                  foreground="#666", justify="left").pack(anchor="w", padx=8, pady=6)
+
+    # ----- tab 3: volcano settings -----
+    def _build_volcano_tab(self, tab):
+        bar = ttk.Frame(tab)
+        bar.pack(side="bottom", fill="x", padx=4, pady=6)
+        self.plot_all_btn = ttk.Button(bar, text="Plot all comparisons", command=self._on_plot_all, state="disabled")
+        self.plot_all_btn.pack(side="left", padx=3)
+        self.plot_btn = ttk.Button(bar, text="Plot selected", command=self._on_plot_volcano, state="disabled")
+        self.plot_btn.pack(side="left", padx=3)
+
+        sel = ttk.Frame(tab)
+        sel.pack(side="top", fill="x", padx=4, pady=4)
+        ttk.Label(sel, text="Single comparison (for 'Plot selected'):", foreground="#666").grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=4)
+        ttk.Label(sel, text="Treatment").grid(row=1, column=0, sticky="w", padx=4)
+        self.treat_cb = ttk.Combobox(sel, state="readonly", width=24, values=[])
+        self.treat_cb.grid(row=1, column=1, padx=4, pady=2)
+        ttk.Label(sel, text="Control").grid(row=2, column=0, sticky="w", padx=4)
+        self.ctrl_cb = ttk.Combobox(sel, state="readonly", width=24, values=[])
+        self.ctrl_cb.grid(row=2, column=1, padx=4, pady=2)
+
+        self._build_volcano_widgets(self._scroll_inner(tab))
+
+    def _build_volcano_widgets(self, parent):
+        v = self.vol_vars
+
+        thr = ttk.LabelFrame(parent, text="Thresholds")
+        thr.pack(fill="x", padx=4, pady=4)
+        v["logFC_cutoff"] = labeled_entry(thr, 0, "log2FC cutoff", "1", tip="blank = none")
+        v["logFC_cutoff2"] = labeled_entry(thr, 1, "log2FC cutoff 2", "", tip="secondary, blank = none")
+        v["FDR_cutoff"] = labeled_entry(thr, 2, "FDR cutoff", "0.05")
+        v["protein_level_cutoff"] = labeled_entry(thr, 3, "Protein-level cutoff", "", tip="blank = off")
+
+        emp = ttk.LabelFrame(parent, text="Empirical FDR")
+        emp.pack(fill="x", padx=4, pady=4)
+        v["use_empirical_fdr"] = check(emp, 0, "Use empirical FDR curve", False)
+        v["fdr_alpha"] = labeled_entry(emp, 1, "FDR alpha", "0.05")
+        v["kappa"] = labeled_entry(emp, 2, "kappa", "1e-6")
+        v["p_value_cutoff"] = labeled_entry(emp, 3, "p_value_cutoff", "1")
+        v["mode"] = labeled_entry(emp, 4, "Mode override", "Auto", tip="Auto / 0 / 1")
+
+        axes = ttk.LabelFrame(parent, text="Axes")
+        axes.pack(fill="x", padx=4, pady=4)
+        v["xlim_min"] = labeled_entry(axes, 0, "x min", "-8")
+        v["xlim_max"] = labeled_entry(axes, 1, "x max", "8")
+        v["ylim_min"] = labeled_entry(axes, 2, "y min", "", tip="blank = auto")
+        v["ylim_max"] = labeled_entry(axes, 3, "y max", "", tip="blank = auto")
+        v["x_interval"] = labeled_entry(axes, 4, "x tick interval", "2")
+        v["y_interval"] = labeled_entry(axes, 5, "y tick interval", "1")
+        v["top_buffer"] = labeled_entry(axes, 6, "Top buffer", "0.1")
+
+        hi = ttk.LabelFrame(parent, text="Highlights")
+        hi.pack(fill="x", padx=4, pady=4)
+        v["imputation_option"] = check(hi, 0, "Mark imputed proteins (orange)", True)
+        v["PharosTCRD"] = check(hi, 1, "Pharos TCRD classes", False)
+        v["highlight_kinase"] = check(hi, 2, "Protein kinases", False)
+        v["highlight_ub"] = check(hi, 3, "Ubiquitin-related", False)
+        v["highlight_Gloops"] = check(hi, 4, "G-loop proteins", False)
+        v["highlight_RTloops"] = check(hi, 5, "RT-loop proteins", False)
+        v["highlight_genes"] = labeled_entry(hi, 6, "Highlight genes", "", width=28,
+                                             tip="UniProt IDs, comma-separated")
+
+        lab = ttk.LabelFrame(parent, text="Labels")
+        lab.pack(fill="x", padx=4, pady=4)
+        v["label_topX_mid_fc"] = labeled_entry(lab, 0, "Label top-X mid FC", "", tip="blank = off")
+        v["label_most_extreme"] = labeled_entry(lab, 1, "Label most extreme (per side)", "", tip="blank = off")
+        v["max_label"] = labeled_entry(lab, 2, "Max labels", "100")
+        v["file_suffix"] = labeled_entry(lab, 3, "File suffix", "")
+
+    # ----- tab 4: bubbleplot settings -----
+    def _build_bubble_tab(self, tab):
+        bar = ttk.Frame(tab)
+        bar.pack(side="bottom", fill="x", padx=4, pady=6)
+        self.bubble_btn = ttk.Button(bar, text="Plot bubble", command=self._on_plot_bubble, state="disabled")
+        self.bubble_btn.pack(side="left", padx=4)
+
+        self._build_bubble_widgets(self._scroll_inner(tab))
+
+    def _build_bubble_widgets(self, parent):
+        v = self.bub_vars
+
+        sar = ttk.LabelFrame(parent, text="SAR groups (downregulated proteins clustered across these)")
+        sar.pack(fill="x", padx=4, pady=4)
+        ttk.Label(sar, text="One group per line:   label: treatmentA, treatmentB",
+                  foreground="#666").pack(anchor="w", padx=4)
+        ttk.Label(sar, text="(label may be empty; treatments are the column names, suffix added below)",
+                  foreground="#888").pack(anchor="w", padx=4)
+        self._sar_text = tk.Text(sar, height=5, width=46, wrap="word")
+        self._sar_text.pack(fill="x", padx=4, pady=3)
+        suf = ttk.Frame(sar)
+        suf.pack(fill="x")
+        v["sar_suffix"] = labeled_entry(suf, 0, "Suffix appended to each", "_vs_DMSO", width=18)
+
+        fig = ttk.LabelFrame(parent, text="Figure")
+        fig.pack(fill="x", padx=4, pady=4)
+        v["fig_title"] = labeled_entry(fig, 0, "Title", "", width=28)
+        v["figure_filename"] = labeled_entry(fig, 1, "Output filename", "bubble_plot.png", width=24)
+        v["fig_width"] = labeled_entry(fig, 2, "Width (in)", "18")
+        v["fig_height"] = labeled_entry(fig, 3, "Height (in)", "12")
+        v["dendro_bubble_height_ratio"] = labeled_entry(fig, 4, "Dendro:bubble height", "1, 3")
+        v["bubble_legend_width_ratio"] = labeled_entry(fig, 5, "Bubble:legend width", "20, 1")
+        v["compound_labelsize"] = labeled_entry(fig, 6, "Compound label size", "20")
+        v["protein_labelsize"] = labeled_entry(fig, 7, "Protein label size", "20")
+        v["colorFCrange"] = labeled_entry(fig, 8, "Color FC range", "-4, 0")
+        v["legend_num"] = labeled_entry(fig, 9, "Legend # entries", "auto", tip="auto or integer")
+
+        opt = ttk.LabelFrame(parent, text="Options")
+        opt.pack(fill="x", padx=4, pady=4)
+        v["highlight_G_loop"] = labeled_entry(opt, 0, "Highlight G-loop", "0", tip="0 none / 1 5res / 2 8res")
+        v["highlight_RT_loop"] = labeled_entry(opt, 1, "Highlight RT-loop", "0", tip="0 none / 1 5res")
+        v["rainbow_palette"] = check(opt, 2, "Rainbow palette (else coolwarm)", False)
+        v["invert_xy"] = check(opt, 3, "Invert axes (no dendrogram)", False)
+        v["selected_genes"] = labeled_entry(opt, 4, "Selected genes only", "", width=28,
+                                            tip="'Desc | GENE', comma-separated; blank = all")
+
+    # ----- data file browsing -----
+    def _browse_pg(self):
+        path = filedialog.askopenfilename(
+            title="Select the protein groups matrix (<stem>.pg_matrix.tsv)",
+            filetypes=[("DIA-NN protein matrix", "*.pg_matrix.tsv"),
+                       ("TSV files", "*.tsv"), ("All files", "*.*")])
+        if not path:
+            return
+        path = os.path.abspath(path)
+        self.cfg_vars["pg_path"].set(path)
+        # Auto-fill the matching pr_matrix with the same stem in the same folder.
+        candidate = os.path.join(os.path.dirname(path), _stem_from_pg(path) + ".pr_matrix.tsv")
+        if os.path.exists(candidate):
+            self.cfg_vars["pr_path"].set(candidate)
+        self._update_path_label()
+
+    def _browse_pr(self):
+        path = filedialog.askopenfilename(
+            title="Select the precursor/peptide matrix (<stem>.pr_matrix.tsv)",
+            filetypes=[("DIA-NN precursor matrix", "*.pr_matrix.tsv"),
+                       ("TSV files", "*.tsv"), ("All files", "*.*")])
+        if not path:
+            return
+        self.cfg_vars["pr_path"].set(os.path.abspath(path))
+        self._update_path_label()
+
+    def _output_dir_for(self, pg_path):
+        workdir = os.path.dirname(os.path.abspath(pg_path))
+        return os.path.join(workdir, _stem_from_pg(pg_path) + "_outputs")
+
+    def _update_path_label(self):
+        pg = self.cfg_vars["pg_path"].get().strip()
+        if pg:
+            workdir = os.path.dirname(os.path.abspath(pg))
+            self.path_label.configure(
+                text=f"Working folder: {workdir}\nOutputs -> {self._output_dir_for(pg)}")
+        else:
+            self.path_label.configure(text="No data selected.")
+
+    def _prefill_sample_data(self):
+        """If sample *.pg_matrix.tsv files ship next to this script, preselect one."""
+        here = os.path.dirname(os.path.abspath(__file__))
+        pgs = sorted(glob.glob(os.path.join(here, "*.pg_matrix.tsv")))
+        if not pgs:
+            self._update_path_label()
+            return
+        pg = pgs[0]
+        self.cfg_vars["pg_path"].set(pg)
+        candidate = os.path.join(here, _stem_from_pg(pg) + ".pr_matrix.tsv")
+        if os.path.exists(candidate):
+            self.cfg_vars["pr_path"].set(candidate)
+        self._update_path_label()
+
+    def _ensure_outdir_cwd(self):
+        """Make the dedicated outputs folder the current dir so all writers land there."""
+        if self.output_dir:
+            os.makedirs(self.output_dir, exist_ok=True)
+            os.chdir(self.output_dir)
+
+    # ----- collecting values -----
+    def _cfg_values(self):
+        return {k: var.get() for k, var in self.cfg_vars.items()}
+
+    def _vol_values(self):
+        return {k: var.get() for k, var in self.vol_vars.items()}
+
+    def _bub_values(self):
+        vals = {k: var.get() for k, var in self.bub_vars.items()}
+        vals["sar"] = self._sar_text.get("1.0", "end")
+        return vals
+
+    # ----- run analysis (stage 1) -----
+    def _on_run(self):
+        try:
+            cfg = build_config(self._cfg_values())
+        except Exception as e:
+            messagebox.showerror("Configuration error", str(e))
+            return
+        self.output_dir = self._output_dir_for(cfg.pg_path)
+        try:
+            os.makedirs(self.output_dir, exist_ok=True)
+        except Exception as e:
+            messagebox.showerror("Output folder error",
+                                 f"Could not create outputs folder:\n{self.output_dir}\n\n{e}")
+            return
+        for b in (self.run_btn, self.preview_btn, self.plot_all_btn, self.plot_btn, self.pca_btn, self.bubble_btn):
+            b.configure(state="disabled")
+        self.status.configure(text="Running...", foreground="#a60")
+        log = logging.getLogger()
+        log.info("Working folder: %s", os.path.dirname(cfg.pg_path))
+        log.info("Outputs folder: %s", self.output_dir)
+        log.info("Starting analysis for '%s'...", cfg.file)
+        threading.Thread(target=self._run_worker, args=(cfg,), daemon=True).start()
+
+    def _run_worker(self, cfg):
+        old_out, old_err = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = _QueueWriter(self.log_q)
+        try:
+            os.makedirs(self.output_dir, exist_ok=True)
+            os.chdir(self.output_dir)
+            result = run_core(cfg)
+            self.result_q.put(("ok", cfg, result))
+        except Exception:
+            self.result_q.put(("error", cfg, traceback.format_exc()))
+        finally:
+            sys.stdout, sys.stderr = old_out, old_err
+
+    def _poll_result(self):
+        try:
+            kind, cfg, payload = self.result_q.get_nowait()
+        except queue.Empty:
+            self.after(150, self._poll_result)
+            return
+
+        self.run_btn.configure(state="normal")
+        self.preview_btn.configure(state="normal")
+        if kind == "error":
+            self.status.configure(text="Failed", foreground="#c00")
+            self.log_q.put(payload + "\n")
+            messagebox.showerror("Analysis failed", "See the log for details.")
+        else:
+            self.cfg = cfg
+            self.result = payload
+            self._set_group_text(payload.group_columns)
+            groups = list(payload.group_columns.keys())
+            self.treat_cb.configure(values=groups)
+            self.ctrl_cb.configure(values=groups)
+            if cfg.comparison_matrix:
+                self.treat_cb.set(cfg.comparison_matrix[0][0])
+                self.ctrl_cb.set(cfg.comparison_matrix[0][1])
+            elif groups:
+                self.treat_cb.set(groups[-1])
+                self.ctrl_cb.set(cfg.reference_group)
+            self.vol_vars["imputation_option"].set(cfg.imputation_option)
+            self.vol_vars["PharosTCRD"].set(cfg.pharos_tcrd)
+            # Prefill bubble SAR with the treatment groups vs the reference.
+            treatments = [k for k in groups if k != cfg.reference_group]
+            self._sar_text.delete("1.0", "end")
+            self._sar_text.insert("1.0", ": " + ", ".join(treatments))
+            self.bub_vars["sar_suffix"].set("_vs_" + cfg.reference_group)
+            for b in (self.plot_all_btn, self.plot_btn, self.pca_btn, self.bubble_btn):
+                b.configure(state="normal")
+            self.status.configure(text="Analysis complete", foreground="#080")
+            # By default, generate volcanoes for ALL comparisons right away.
+            self.after(50, self._on_plot_all)
+        self.after(150, self._poll_result)
+
+    # ----- plotting (stages 2 & 3) -----
+    def _embed(self, fig):
+        for w in self.plot_container.winfo_children():
+            w.destroy()
+        canvas = FigureCanvasTkAgg(fig, master=self.plot_container)
+        canvas.draw()
+        NavigationToolbar2Tk(canvas, self.plot_container).update()
+        canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
+        self._plot_canvas = canvas
+
+    def _embed_notebook(self, items):
+        """Embed several figures, one tab per (name, figure)."""
+        for w in self.plot_container.winfo_children():
+            w.destroy()
+        nb = ttk.Notebook(self.plot_container)
+        nb.pack(side="top", fill="both", expand=True)
+        self._tab_canvases = []
+        for name, fig in items:
+            tab = ttk.Frame(nb)
+            nb.add(tab, text=name)
+            canvas = FigureCanvasTkAgg(fig, master=tab)
+            canvas.draw()
+            NavigationToolbar2Tk(canvas, tab).update()
+            canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
+            self._tab_canvases.append(canvas)
+        self._plot_canvas = self._tab_canvases[-1] if self._tab_canvases else None
+
+    def _on_plot_all(self):
+        """Generate a volcano for every comparison using the current settings."""
+        if self.result is None:
+            return
+        try:
+            params = build_volcano_params(self._vol_values())
+        except Exception as e:
+            messagebox.showerror("Invalid volcano setting", str(e))
+            return
+
+        comparisons = list(self.result.imputed_dataframes.keys())  # 'treated_vs_control'
+        if not comparisons:
+            messagebox.showinfo("Volcano", "No comparisons were produced by the analysis.")
+            return
+
+        self._ensure_outdir_cwd()
+        plt.close("all")
+        items, errors = [], []
+        for name in comparisons:
+            treated_name, control_name = name.split("_vs_")
+            try:
+                volcano_plot(
+                    treated_name, control_name,
+                    df=self.result.summary,
+                    group_columns=self.result.group_columns,
+                    imputation_dict=self.result.imputation_dict,
+                    config=self.cfg,
+                    **params,
+                )
+                items.append((name, plt.gcf()))
+            except Exception:
+                errors.append(name)
+                self.log_q.put(f"[{name}] {traceback.format_exc()}\n")
+
+        if items:
+            self._embed_notebook(items)
+        logging.getLogger().info("Plotted %d/%d comparisons (PNGs saved).", len(items), len(comparisons))
+        if errors:
+            messagebox.showwarning("Some comparisons failed",
+                                   "Failed: " + ", ".join(errors) + "\nSee the log for details.")
+
+    def _on_plot_volcano(self):
+        if self.result is None:
+            return
+        treated = self.treat_cb.get()
+        control = self.ctrl_cb.get()
+        if not treated or not control:
+            messagebox.showerror("Volcano", "Select a treatment and control group.")
+            return
+        try:
+            params = build_volcano_params(self._vol_values())
+        except Exception as e:
+            messagebox.showerror("Invalid volcano setting", str(e))
+            return
+        try:
+            self._ensure_outdir_cwd()
+            plt.close("all")
+            volcano_plot(
+                treated, control,
+                df=self.result.summary,
+                group_columns=self.result.group_columns,
+                imputation_dict=self.result.imputation_dict,
+                config=self.cfg,
+                **params,
+            )
+            self._embed(plt.gcf())
+            logging.getLogger().info("Plotted volcano %s vs %s", treated, control)
+        except Exception:
+            self.log_q.put(traceback.format_exc() + "\n")
+            messagebox.showerror("Plot failed", "See the log for details.")
+
+    def _on_plot_pca(self):
+        if self.result is None:
+            return
+        try:
+            self._ensure_outdir_cwd()
+            plt.close("all")
+            generate_pca_plot(
+                self.result.df_original, self.result.group_columns,
+                filename=str(self.pca_vars["filename"].get()).strip() or "PCA_plot.png",
+                title=str(self.pca_vars["title"].get()),
+                text=bool(self.pca_vars["text"].get()),
+            )
+            self._embed(plt.gcf())
+            logging.getLogger().info("Plotted PCA")
+        except Exception:
+            self.log_q.put(traceback.format_exc() + "\n")
+            messagebox.showerror("PCA failed", "See the log for details.")
+
+    def _on_plot_bubble(self):
+        if self.result is None:
+            return
+        try:
+            SAR, kwargs = build_bubble_params(self._bub_values())
+        except Exception as e:
+            messagebox.showerror("Invalid bubble setting", str(e))
+            return
+        try:
+            self._ensure_outdir_cwd()
+            # bubble_dendro_plot reads "<stem>_analyzed.csv" from the working dir;
+            # write the analysis summary there so it has data to plot.
+            analyzed = self.cfg.file.split(".")[0] + "_analyzed.csv"
+            self.result.summary.to_csv(analyzed)
+            plt.close("all")
+            bubble_dendro_plot(SAR, self.cfg, **kwargs)
+            self._embed(plt.gcf())
+            logging.getLogger().info("Plotted bubble plot -> %s", kwargs["figure_filename"])
+        except Exception:
+            self.log_q.put(traceback.format_exc() + "\n")
+            messagebox.showerror(
+                "Bubble plot failed",
+                "See the log for details.\n\nTip: the bubble plot needs at least two "
+                "proteins that are significantly down-regulated (log2FC < -1, bh_FDR < 0.01) "
+                "across the SAR treatments.")
+
+
+def main():
+    app = VolcanoGUI()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
