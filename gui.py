@@ -714,6 +714,8 @@ class VolcanoGUI(tk.Tk):
         self.bub_vars = {}
         self._sar_text = None
         self._plot_canvas = None
+        self._volcano_nb = None        # the volcano "plot all" notebook (if shown)
+        self._current_volcano_comp = None   # last single volcano comparison shown
         self.output_dir = None   # dedicated outputs folder under the data folder
         self._log_fh = None      # open file handle: <output_dir>/analysis_log.txt
         self._scrollables = []   # ScrollableFrames, for app-wide mouse-wheel routing
@@ -829,7 +831,30 @@ class VolcanoGUI(tk.Tk):
 
     def _on_tab_changed(self, _event=None):
         idx = self.nb.index(self.nb.select())
-        self._show_tab_area(self._tab_index_key.get(idx))
+        key = self._tab_index_key.get(idx)
+        self._show_tab_area(key)
+        # Entering the lookup tab: default its comparison to the one currently shown
+        # on the volcano panel (the active "plot all" sub-tab, or the last single plot).
+        if key == "lookup":
+            comp = self._current_volcano_comparison()
+            if comp:
+                try:
+                    if comp in list(self.lookup_comp.cget("values")):
+                        self.lookup_comp.set(comp)
+                except Exception:
+                    pass
+
+    def _current_volcano_comparison(self):
+        """The comparison currently displayed on the volcano panel, or None."""
+        nb = self._volcano_nb
+        try:
+            if nb is not None and nb.winfo_exists():
+                sel = nb.select()
+                if sel:
+                    return nb.tab(sel, "text")
+        except Exception:
+            pass
+        return self._current_volcano_comp
 
     def _scroll_inner(self, tab):
         sf = ScrollableFrame(tab, width=470)
@@ -1708,6 +1733,8 @@ class VolcanoGUI(tk.Tk):
         container = self._tab_area(key)
         nb = ttk.Notebook(container)
         nb.pack(side="top", fill="both", expand=True)
+        if key == "volcano":
+            self._volcano_nb = nb            # remember it to read the active comparison
         self._tab_canvases = []
         for name, fig in items:
             tab = ttk.Frame(nb)
@@ -1890,7 +1917,9 @@ class VolcanoGUI(tk.Tk):
                 config=self.cfg,
                 **params,
             )
-            self._embed(plt.gcf(), "volcano")
+            self._embed(plt.gcf(), "volcano")          # single plot replaces any notebook
+            self._volcano_nb = None
+            self._current_volcano_comp = f"{treated}_vs_{control}"
             self._attach_hover(self._plot_canvas, treated, control)
             logging.getLogger().info("Plotted volcano %s vs %s", treated, control)
         except Exception:
