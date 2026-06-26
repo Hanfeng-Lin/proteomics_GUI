@@ -142,8 +142,6 @@ def bubble_dendro_plot(SAR, config, SAR_suffix="", figure_filename="bubble_plot.
     melted_log2FC["Suffix"] = pd.Categorical(melted_log2FC["Suffix"], categories=ordered_suffixes, ordered=True)
     melted_log2FC.sort_values(by=["Suffix", "Description_Genes"], inplace=True)
 
-    melted_log2FC.to_csv("temp.csv")
-
     # Define colors for groups (from SAR) and for clusters
     unique_groups = melted_log2FC["Group"].dropna().unique()
     group_colors = {group: get_cmap("tab20")(i / len(unique_groups)) for i, group in enumerate(unique_groups)}

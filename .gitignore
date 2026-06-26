@@ -12,8 +12,9 @@ __pycache__/
 proteomics_GUI_output/
 *_outputs/
 *_analyzed.csv
-FC_results*.xlsx
-final_analysis_summary*.csv
+final_analysis_results*.xlsx
+significant_*reg.xlsx
+temp.csv
 Normalized_imputed_data_*.tsv
 temp.csv
 *.png

@@ -47,14 +47,14 @@ class AnalysisResult:
 def _save_workflow_excel(config, df_original, group_columns, imputed_dataframes, df_final_results, imputation_dict):
     if config.imputation_option:
         if config.normalization_protein_id:
-            output_excel_path = "FC_results_imputation_and_normalization.xlsx"
+            output_excel_path = "final_analysis_results_imputed_normalized.xlsx"
         else:
-            output_excel_path = "FC_results_imputation.xlsx"
+            output_excel_path = "final_analysis_results_imputed.xlsx"
     else:
         if config.normalization_protein_id:
-            output_excel_path = "FC_results_normalization.xlsx"
+            output_excel_path = "final_analysis_results_normalized.xlsx"
         else:
-            output_excel_path = "FC_results.xlsx"
+            output_excel_path = "final_analysis_results.xlsx"
 
     # Identify metadata columns (columns that are not part of any experimental group).
     all_experimental_cols = [col for group in group_columns.values() for col in group]
@@ -78,6 +78,14 @@ def _save_workflow_excel(config, df_original, group_columns, imputed_dataframes,
             df_subset = imputed_df[intensity_cols].copy()
             df_subset[fc_col] = df_final_results[fc_col]
             df_subset[log2fc_col] = df_final_results[log2fc_col]
+
+            # Include the limma statistics if present (this runs after run_limma).
+            p_col = f'Pvalue_{comparison_name}'        # raw moderated-t p
+            fdr_col = f'bh_FDR_{comparison_name}'      # adjusted P (BH/FDR)
+            if p_col in df_final_results.columns:
+                df_subset[p_col] = df_final_results[p_col]
+            if fdr_col in df_final_results.columns:
+                df_subset[fdr_col] = df_final_results[fdr_col]
 
             # Flag proteins imputed via the special high-missing-value protocol
             # (the same set marked orange on the volcano plot) as TRUE / FALSE.
@@ -168,6 +176,8 @@ def run_workflow(config, df_original, df_peptide, group_columns, save_excel=True
 # cell 9: limma (moderated t-test; the only statistics path)
 # --------------------------------------------------------------------------- #
 def run_limma(config, imputed_dataframes, df_final_results, group_columns, save_csv=True):
+    # `save_csv` is kept for signature compatibility; the standalone summary CSV is
+    # no longer written (the same table is the Excel's Fold_Change_Summary sheet).
     for comparison_name, imputed_df in imputed_dataframes.items():
         print(f"Running Limma for: {comparison_name}...")
         treated_name, control_name = comparison_name.split('_vs_')
@@ -181,8 +191,6 @@ def run_limma(config, imputed_dataframes, df_final_results, group_columns, save_
                 limma_results_df, left_index=True, right_index=True, how="left"
             )
 
-    if save_csv:
-        df_final_results.to_csv("final_analysis_summary_with_limma.csv", index=False)
     print("\nLimma analysis complete. Final summary has been updated.")
     return df_final_results
 
@@ -259,10 +267,14 @@ def run_core(config: Optional[AnalysisConfig] = None, contaminants=None, save_ou
     group_columns = assign_groups(df, config.group_names)
     df = control_group_cleanup(df, config, group_columns)
 
+    # Defer the Excel export until after limma so the per-comparison sheets can
+    # include the p-value / adjusted-P columns (run_workflow runs before limma).
     imputed_dataframes, imputation_dict, summary = run_workflow(
-        config, df, df_peptide, group_columns, save_excel=save_outputs
+        config, df, df_peptide, group_columns, save_excel=False
     )
     summary = run_limma(config, imputed_dataframes, summary, group_columns, save_csv=save_outputs)
+    if save_outputs:
+        _save_workflow_excel(config, df, group_columns, imputed_dataframes, summary, imputation_dict)
 
     result = AnalysisResult(
         config=config,

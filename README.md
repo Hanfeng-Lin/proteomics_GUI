@@ -124,9 +124,10 @@ All outputs are written to a dedicated **`proteomics_GUI_output/`** folder creat
 **next to your data** (the working folder). Nothing is written into the
 application folder. They include:
 
-- the volcano / PCA PNGs and the fold-change Excel (`FC_results_*.xlsx`; each
-  per-comparison sheet has an **`Imputed`** TRUE/FALSE column),
-- `final_analysis_summary_with_limma.csv` (raw `Pvalue_` and adjusted `bh_FDR_`),
+- the volcano / PCA PNGs and the main results Excel
+  (**`final_analysis_results_imputed.xlsx`**): a `Fold_Change_Summary` sheet (FC,
+  log2FC, raw `Pvalue_`, adjusted `bh_FDR_`) plus a per-comparison sheet each with
+  the imputed intensities and an **`Imputed`** TRUE/FALSE column,
 - **`significant_downreg.xlsx`** and **`significant_upreg.xlsx`** — one row per
   significant entry (log2FC ≤ −1 / ≥ 1, adjusted P ≤ 0.05) with columns
   *comparison, gene, uniprot, log2FC, p, adjusted P, imputed*,
