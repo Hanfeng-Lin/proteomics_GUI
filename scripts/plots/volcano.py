@@ -46,7 +46,9 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
                  dpi=None,
                  dot_size=40, dot_alpha=0.5,
                  color_bg="grey", color_up="red", color_down="blue",
-                 color_imputed="orange", color_highlight="green"):
+                 color_imputed="orange", color_highlight="green",
+                 color_kinase="#17becf", color_ub="#17becf", color_gloops="#17becf", color_rtloops="#e377c2",
+                 color_tclin="#17becf", color_tchem="#e377c2", color_tbio="#8c564b", color_tdark="#7f7f7f"):
     # Resolve settings that the notebook bound from globals.
     if mode is None:
         mode = config.mode
@@ -174,32 +176,32 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
         Tchem_highlight = df.loc[Tchem_filtered]
         Tbio_highlight = df.loc[Tbio_filtered]
         Tdark_highlight = df.loc[Tdark_filtered]
-        plt.scatter(x=Tclin_highlight[logFC], y=Tclin_highlight[FDR].apply(lambda x:-np.log10(x)), s=30, alpha=1, color='#17becf', label="Tclin") # Cyan for Tclin
-        plt.scatter(x=Tchem_highlight[logFC], y=Tchem_highlight[FDR].apply(lambda x:-np.log10(x)), s=30, alpha=1, color='#e377c2', label="Tchem") # Pink for Tchem
-        plt.scatter(x=Tbio_highlight[logFC],   y=Tbio_highlight[FDR].apply(lambda x:-np.log10(x)), s=30, alpha=1, color='#8c564b', label="Tbio") # Brown for Tbio
-        plt.scatter(x=Tdark_highlight[logFC], y=Tdark_highlight[FDR].apply(lambda x:-np.log10(x)), s=30, alpha=1, color='#7f7f7f', label="Tdark") # Grey for Tdark
+        plt.scatter(x=Tclin_highlight[logFC], y=Tclin_highlight[FDR].apply(lambda x:-np.log10(x)), s=30, alpha=1, color=color_tclin, label="Tclin")
+        plt.scatter(x=Tchem_highlight[logFC], y=Tchem_highlight[FDR].apply(lambda x:-np.log10(x)), s=30, alpha=1, color=color_tchem, label="Tchem")
+        plt.scatter(x=Tbio_highlight[logFC],   y=Tbio_highlight[FDR].apply(lambda x:-np.log10(x)), s=30, alpha=1, color=color_tbio, label="Tbio")
+        plt.scatter(x=Tdark_highlight[logFC], y=Tdark_highlight[FDR].apply(lambda x:-np.log10(x)), s=30, alpha=1, color=color_tdark, label="Tdark")
 
     if highlight_kinase:
         kinase_filtered = [item for item in protein_kinase_list if item in df.index]
         kinase_highlight = df.loc[kinase_filtered]
-        plt.scatter(x=kinase_highlight[logFC], y=kinase_highlight[FDR].apply(lambda x:-np.log10(x)), s=20, alpha=0.5, color='#17becf', label="Protein kinase") # Cyan for kinase
+        plt.scatter(x=kinase_highlight[logFC], y=kinase_highlight[FDR].apply(lambda x:-np.log10(x)), s=20, alpha=0.5, color=color_kinase, label="Protein kinase")
 
     if highlight_ub:
         ub_filtered = [item for item in protein_ubiquitination_list if item in df.index]
         ub_highlight = df.loc[ub_filtered]
-        plt.scatter(x=ub_highlight[logFC], y=ub_highlight[FDR].apply(lambda x:-np.log10(x)), s=20, alpha=0.5, color='#17becf', label="Ubiquitin-related proteins") # Cyan for ubiquitin-related proteins
+        plt.scatter(x=ub_highlight[logFC], y=ub_highlight[FDR].apply(lambda x:-np.log10(x)), s=20, alpha=0.5, color=color_ub, label="Ubiquitin-related proteins")
         # I want ub_highlight and logFC>1
         concat_df = pd.concat([concat_df, ub_highlight[(ub_highlight[logFC] > logFC_cutoff)|(ub_highlight[FDR]<=FDR_cutoff)]]).drop_duplicates()
 
     if highlight_Gloops:
         Gloops_filtered = [item for item in g_loop_5res_noEC if item in df.index]
         Gloops_highlight = df.loc[Gloops_filtered]
-        plt.scatter(x=Gloops_highlight[logFC], y=Gloops_highlight[FDR].apply(lambda x:-np.log10(x)), s=20, alpha=0.5, color='#17becf', label="G-loop proteins") # Cyan for G-loops
+        plt.scatter(x=Gloops_highlight[logFC], y=Gloops_highlight[FDR].apply(lambda x:-np.log10(x)), s=20, alpha=0.5, color=color_gloops, label="G-loop proteins")
 
     if highlight_RTloops:
         RTloops_filtered = [item for item in RT_loop_5res if item in df.index]
         RTloops_highlight = df.loc[RTloops_filtered]
-        plt.scatter(x=RTloops_highlight[logFC], y=RTloops_highlight[FDR].apply(lambda x:-np.log10(x)), s=20, alpha=0.5, color='#e377c2', label="RT-loop proteins") # Pink for RT-loops
+        plt.scatter(x=RTloops_highlight[logFC], y=RTloops_highlight[FDR].apply(lambda x:-np.log10(x)), s=20, alpha=0.5, color=color_rtloops, label="RT-loop proteins")
 
     if label_topX_mid_fc:
         # Identify mid FC candidates (logFC between -1 and -0.32 (20%deg))

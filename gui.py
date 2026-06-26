@@ -25,7 +25,7 @@ import traceback
 import contextvars
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, colorchooser
 
 import matplotlib
 matplotlib.use("Agg")  # figures are embedded manually; no stray windows
@@ -148,6 +148,14 @@ def build_volcano_params(v):
         color_down=str(v["color_down"]),
         color_imputed=str(v["color_imputed"]),
         color_highlight=str(v["color_highlight"]),
+        color_kinase=str(v["color_kinase"]),
+        color_ub=str(v["color_ub"]),
+        color_gloops=str(v["color_gloops"]),
+        color_rtloops=str(v["color_rtloops"]),
+        color_tclin=str(v["color_tclin"]),
+        color_tchem=str(v["color_tchem"]),
+        color_tbio=str(v["color_tbio"]),
+        color_tdark=str(v["color_tdark"]),
         title_fontsize=_req_float(v["title_fontsize"], 24),
         axis_label_fontsize=_req_float(v["axis_label_fontsize"], 20),
         tick_fontsize=_req_float(v["tick_fontsize"], 16),
@@ -361,6 +369,55 @@ def check(parent, row, label, default=False, hint=None):
     cb.grid(row=row, column=0, columnspan=3, sticky="w", padx=4, pady=1)
     if hint:
         Tooltip(cb, hint)
+    return var
+
+
+def _readable_fg(color):
+    """Black or white text depending on how light the background colour is."""
+    try:
+        import tkinter as _tk
+        # Use a hidden widget to resolve names to RGB if needed.
+        r, g, b = (0, 0, 0)
+        c = str(color)
+        if c.startswith("#") and len(c) == 7:
+            r, g, b = int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)
+        else:
+            named = {"black": (0, 0, 0), "white": (255, 255, 255), "grey": (128, 128, 128),
+                     "gray": (128, 128, 128), "red": (255, 0, 0), "blue": (0, 0, 255),
+                     "green": (0, 128, 0), "orange": (255, 165, 0), "yellow": (255, 255, 0),
+                     "gold": (255, 215, 0), "cyan": (0, 255, 255), "magenta": (255, 0, 255)}
+            r, g, b = named.get(c.lower(), (128, 128, 128))
+        return "black" if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else "white"
+    except Exception:
+        return "black"
+
+
+def color_row(parent, row, label, default, hint=None):
+    """A label + a swatch button that opens a colour picker; returns the colour var."""
+    lbl = ttk.Label(parent, text=label)
+    lbl.grid(row=row, column=0, sticky="w", padx=4, pady=2)
+    var = tk.StringVar(value=str(default))
+    btn = tk.Button(parent, textvariable=var, width=12, relief="groove")
+
+    def _restyle(*_a):
+        c = var.get()
+        try:
+            btn.configure(background=c, activebackground=c, foreground=_readable_fg(c))
+        except Exception:
+            pass
+
+    def _pick():
+        _rgb, hx = colorchooser.askcolor(color=var.get() or None, title=label, parent=parent)
+        if hx:
+            var.set(hx)
+            _restyle()
+
+    btn.configure(command=_pick)
+    btn.grid(row=row, column=1, sticky="w", padx=4, pady=2)
+    _restyle()
+    if hint:
+        Tooltip(lbl, hint)
+        Tooltip(btn, hint)
     return var
 
 
@@ -586,10 +643,9 @@ class ScrollableFrame(ttk.Frame):
         self._win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
         self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._win, width=e.width))
-        self.canvas.bind_all("<MouseWheel>", self._on_wheel)
-
-    def _on_wheel(self, event):
-        self.canvas.yview_scroll(int(-event.delta / 120), "units")
+        # Mouse-wheel handling is done app-wide by VolcanoGUI._global_wheel, which
+        # scrolls whichever ScrollableFrame the pointer is over (a per-instance
+        # bind_all would let the last-created frame hijack the wheel everywhere).
 
 
 # --------------------------------------------------------------------------- #
@@ -599,7 +655,7 @@ class VolcanoGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("DIA-NN Proteomics  -  Volcano / Bubble Explorer")
-        self.geometry("1360x900")
+        self.geometry("1640x900")
 
         self.result = None      # AnalysisResult after a run
         self.cfg = None
@@ -611,11 +667,13 @@ class VolcanoGUI(tk.Tk):
         self._plot_canvas = None
         self.output_dir = None   # dedicated outputs folder under the data folder
         self._log_fh = None      # open file handle: <output_dir>/analysis_log.txt
+        self._scrollables = []   # ScrollableFrames, for app-wide mouse-wheel routing
 
         self.log_q = queue.Queue()
         self.result_q = queue.Queue()
 
         self._build_ui()
+        self.bind_all("<MouseWheel>", self._global_wheel, add="+")
         self._setup_logging()
         self._prefill_sample_data()
 
@@ -662,6 +720,7 @@ class VolcanoGUI(tk.Tk):
 
         main = ttk.PanedWindow(self, orient="horizontal")
         main.pack(side="top", fill="both", expand=True, padx=8, pady=(8, 4))
+        self._paned = main
 
         self.nb = ttk.Notebook(main)
         nb = self.nb
@@ -726,7 +785,19 @@ class VolcanoGUI(tk.Tk):
     def _scroll_inner(self, tab):
         sf = ScrollableFrame(tab, width=470)
         sf.pack(side="top", fill="both", expand=True)
+        self._scrollables.append(sf)
         return sf.inner
+
+    def _global_wheel(self, event):
+        """Scroll whichever ScrollableFrame the pointer is currently over."""
+        for sf in self._scrollables:
+            c = sf.canvas
+            if not c.winfo_ismapped():
+                continue
+            rx, ry = c.winfo_rootx(), c.winfo_rooty()
+            if rx <= event.x_root < rx + c.winfo_width() and ry <= event.y_root < ry + c.winfo_height():
+                c.yview_scroll(int(-event.delta / 120), "units")
+                return "break"
 
     # ----- tab 1: analysis configuration -----
     def _build_config_tab(self, tab):
@@ -928,6 +999,14 @@ class VolcanoGUI(tk.Tk):
 
         self._build_volcano_widgets(self._scroll_inner(tab))
 
+    @staticmethod
+    def _bind_show(var, frame):
+        """Show `frame` (grid) only while the boolean `var` is True."""
+        def _upd(*_a):
+            frame.grid() if var.get() else frame.grid_remove()
+        var.trace_add("write", _upd)
+        _upd()
+
     def _build_volcano_widgets(self, parent):
         v = self.vol_vars
 
@@ -978,41 +1057,70 @@ class VolcanoGUI(tk.Tk):
         hi = ttk.LabelFrame(parent, text="Highlights")
         hi.pack(fill="x", padx=4, pady=4)
         v["imputation_option"] = check(hi, 0, "Mark imputed proteins (orange)", True,
-                                       hint="Colour proteins that were imputed (special high-missing protocol) orange.")
+                                       hint="Colour proteins that were imputed (special high-missing protocol); "
+                                            "the colour is the 'Imputed colour' in the Dots section.")
+
+        # Each of these highlight sets reveals its colour picker(s) when ticked.
         v["PharosTCRD"] = check(hi, 1, "Pharos TCRD classes", False,
                                 hint="Colour proteins by Pharos target-development level (Tclin/Tchem/Tbio/Tdark).")
-        v["highlight_kinase"] = check(hi, 2, "Protein kinases", False,
+        ph = ttk.Frame(hi)
+        ph.grid(row=2, column=0, columnspan=3, sticky="w", padx=18)
+        v["color_tclin"] = color_row(ph, 0, "Tclin colour", "#17becf")
+        v["color_tchem"] = color_row(ph, 1, "Tchem colour", "#e377c2")
+        v["color_tbio"] = color_row(ph, 2, "Tbio colour", "#8c564b")
+        v["color_tdark"] = color_row(ph, 3, "Tdark colour", "#7f7f7f")
+        self._bind_show(v["PharosTCRD"], ph)
+
+        v["highlight_kinase"] = check(hi, 3, "Protein kinases", False,
                                       hint="Mark proteins in the protein-kinase reference list.")
-        v["highlight_ub"] = check(hi, 3, "Ubiquitin-related", False,
+        kf = ttk.Frame(hi)
+        kf.grid(row=4, column=0, columnspan=3, sticky="w", padx=18)
+        v["color_kinase"] = color_row(kf, 0, "Kinase colour", "#17becf")
+        self._bind_show(v["highlight_kinase"], kf)
+
+        v["highlight_ub"] = check(hi, 5, "Ubiquitin-related", False,
                                   hint="Mark ubiquitin-related proteins (and add the significant ones to the labels).")
-        v["highlight_Gloops"] = check(hi, 4, "G-loop proteins", False,
+        uf = ttk.Frame(hi)
+        uf.grid(row=6, column=0, columnspan=3, sticky="w", padx=18)
+        v["color_ub"] = color_row(uf, 0, "Ubiquitin colour", "#17becf")
+        self._bind_show(v["highlight_ub"], uf)
+
+        v["highlight_Gloops"] = check(hi, 7, "G-loop proteins", False,
                                       hint="Mark proteins in the G-loop reference list.")
-        v["highlight_RTloops"] = check(hi, 5, "RT-loop proteins", False,
+        gf = ttk.Frame(hi)
+        gf.grid(row=8, column=0, columnspan=3, sticky="w", padx=18)
+        v["color_gloops"] = color_row(gf, 0, "G-loop colour", "#17becf")
+        self._bind_show(v["highlight_Gloops"], gf)
+
+        v["highlight_RTloops"] = check(hi, 9, "RT-loop proteins", False,
                                        hint="Mark proteins in the RT-loop reference list.")
-        v["highlight_genes"] = labeled_entry(hi, 6, "Highlight genes", "", width=28,
+        rf = ttk.Frame(hi)
+        rf.grid(row=10, column=0, columnspan=3, sticky="w", padx=18)
+        v["color_rtloops"] = color_row(rf, 0, "RT-loop colour", "#e377c2")
+        self._bind_show(v["highlight_RTloops"], rf)
+
+        v["highlight_genes"] = labeled_entry(hi, 11, "Highlight genes", "", width=28,
                                              tip="UniProt IDs, comma-separated",
-                                             hint="Specific proteins to mark (green) and always label. "
-                                                  "Comma-separated UniProt IDs, e.g. Q13546, P51617.")
+                                             hint="Specific proteins to mark and always label (colour = 'Highlight "
+                                                  "colour' in the Dots section). Comma-separated UniProt IDs.")
 
         dots = ttk.LabelFrame(parent, text="Dots (size, transparency, colours)")
         dots.pack(fill="x", padx=4, pady=4)
-        _colors = ["grey", "black", "red", "blue", "green", "orange", "purple", "brown",
-                   "pink", "cyan", "magenta", "teal", "navy", "gold", "darkred", "darkblue", "darkgreen"]
         v["dot_size"] = labeled_combo(dots, 0, "Dot size", [10, 20, 30, 40, 50, 60, 80, 100], 40,
                                       hint="Marker size of the main dots (background, up, down).")
         v["dot_alpha"] = labeled_combo(dots, 1, "Transparency (alpha)",
                                        ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"], "0.5",
                                        hint="Opacity of the main dots: 1.0 = solid, lower = more see-through.")
-        v["color_up"] = labeled_combo(dots, 2, "Up-regulated colour", _colors, "red",
-                                      hint="Colour of significant up-regulated dots.")
-        v["color_down"] = labeled_combo(dots, 3, "Down-regulated colour", _colors, "blue",
-                                        hint="Colour of significant down-regulated dots.")
-        v["color_imputed"] = labeled_combo(dots, 4, "Imputed colour", _colors, "orange",
-                                           hint="Colour of the imputed-protein markers.")
-        v["color_highlight"] = labeled_combo(dots, 5, "Highlight colour", _colors, "green",
-                                             hint="Colour of the 'Highlight genes' markers.")
-        v["color_bg"] = labeled_combo(dots, 6, "Background colour", _colors, "grey",
-                                      hint="Colour of the non-significant background dots.")
+        v["color_up"] = color_row(dots, 2, "Up-regulated colour", "red",
+                                  hint="Colour of significant up-regulated dots (click to pick).")
+        v["color_down"] = color_row(dots, 3, "Down-regulated colour", "blue",
+                                    hint="Colour of significant down-regulated dots (click to pick).")
+        v["color_imputed"] = color_row(dots, 4, "Imputed colour", "orange",
+                                       hint="Colour of the imputed-protein markers (click to pick).")
+        v["color_highlight"] = color_row(dots, 5, "Highlight colour", "green",
+                                         hint="Colour of the 'Highlight genes' markers (click to pick).")
+        v["color_bg"] = color_row(dots, 6, "Background colour", "grey",
+                                  hint="Colour of the non-significant background dots (click to pick).")
 
         lab = ttk.LabelFrame(parent, text="Labels")
         lab.pack(fill="x", padx=4, pady=4)
