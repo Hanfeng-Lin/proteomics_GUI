@@ -29,7 +29,7 @@ def bubble_dendro_plot(SAR, config, df=None, SAR_suffix="", figure_filename="bub
                        compound_labelsize=10, protein_labelsize=10,
                        colorFCrange=[-4,0], highlight_G_loop=0, highlight_RT_loop=0, rainbow_palette=0,
                        invert_xy=False, selected_genes=[], legend_num: Union[str, int] = "auto",
-                       protein_label="description_gene",
+                       protein_label="description_gene", bubble_size_scale=1.0,
                        title_fontsize=14, axis_fontsize=12, colorbar_label_fontsize=12,
                        colorbar_tick_fontsize=10, legend_fontsize=10, dpi=200):
     # SAR_suffix="_1uM_vs_DMSO"
@@ -190,12 +190,14 @@ def bubble_dendro_plot(SAR, config, df=None, SAR_suffix="", figure_filename="bub
         ax_bubble = fig.add_subplot(gs[0, 0])
 
     # Plotting the bubble scatter plot with (x, y) depending on invert_xy.
+    # Circle area = -log10(FDR) * base; bubble_size_scale enlarges/shrinks them all.
+    _size_base = 500 * bubble_size_scale
     if not invert_xy:
         scatter = ax_bubble.scatter(
             melted_log2FC["Description_Genes"],  # x-axis: protein descriptions
             melted_log2FC["Suffix"],             # y-axis: treatment suffixes
             c=melted_log2FC["log2FC"],            # color by log2FC
-            s=melted_log2FC["bh_FDR_log10"] * 500,  # size proportional to -log10(FDR)
+            s=melted_log2FC["bh_FDR_log10"] * _size_base,  # size proportional to -log10(FDR)
             cmap=get_cmap("Spectral").reversed() if rainbow_palette else "coolwarm",
             alpha=0.7,
             edgecolors="w",
@@ -206,7 +208,7 @@ def bubble_dendro_plot(SAR, config, df=None, SAR_suffix="", figure_filename="bub
             melted_log2FC["Suffix"],              # x-axis: treatment suffixes
             melted_log2FC["Description_Genes"],   # y-axis: protein descriptions
             c=melted_log2FC["log2FC"],
-            s=melted_log2FC["bh_FDR_log10"] * 500,
+            s=melted_log2FC["bh_FDR_log10"] * _size_base,
             cmap=get_cmap("Spectral").reversed() if rainbow_palette else "coolwarm",
             alpha=0.7,
             edgecolors="w",
@@ -233,7 +235,7 @@ def bubble_dendro_plot(SAR, config, df=None, SAR_suffix="", figure_filename="bub
 
     # Create size legend from scatter elements
     handles, labels = scatter.legend_elements(
-        prop="sizes", alpha=0.6, num=legend_num+1 if legend_num is int else legend_num, func=lambda s: s / 500,
+        prop="sizes", alpha=0.6, num=legend_num+1 if legend_num is int else legend_num, func=lambda s: s / _size_base,
         fmt=FuncFormatter(lambda x, pos: f"{x:.2f}")
     )
     new_labels = [f"FDR = {10**(-float(l)):.2g}" for l in labels]

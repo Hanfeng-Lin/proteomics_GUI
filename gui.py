@@ -205,6 +205,7 @@ def build_bubble_params(v):
         selected_genes=_genes(v["selected_genes"]),
         legend_num=legend_num,
         protein_label="gene" if str(v.get("protein_label_mode", "")).startswith("Gene") else "description_gene",
+        bubble_size_scale=_req_float(v["bubble_size_scale"], 1.0),
         title_fontsize=_req_float(v["title_fontsize"], 14),
         axis_fontsize=_req_float(v["axis_fontsize"], 12),
         colorbar_label_fontsize=_req_float(v["colorbar_label_fontsize"], 12),
@@ -636,9 +637,10 @@ class ScrollableFrame(ttk.Frame):
         # A bounded canvas height keeps tall tab content from forcing the whole
         # window taller (which would push the Log box off-screen) -- it scrolls.
         self.canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0, width=width, height=height)
-        vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
+        self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        # Route yscrollcommand through _yscroll so the bar auto-hides when it fits.
+        self.canvas.configure(yscrollcommand=self._yscroll)
+        self.vsb.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
         self.inner = ttk.Frame(self.canvas)
         self._win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
@@ -647,6 +649,20 @@ class ScrollableFrame(ttk.Frame):
         # Mouse-wheel handling is done app-wide by VolcanoGUI._global_wheel, which
         # scrolls whichever ScrollableFrame the pointer is over (a per-instance
         # bind_all would let the last-created frame hijack the wheel everywhere).
+
+    def _yscroll(self, first, last):
+        """Show the scrollbar only when the content overflows the viewport."""
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            if self.vsb.winfo_ismapped():
+                self.vsb.pack_forget()
+        elif not self.vsb.winfo_ismapped():
+            self.vsb.pack(side="right", fill="y", before=self.canvas)
+        self.vsb.set(first, last)
+
+    def scrollable(self):
+        """True when the content is taller than the viewport (wheel can move it)."""
+        first, last = self.canvas.yview()
+        return not (float(first) <= 0.0 and float(last) >= 1.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -797,7 +813,8 @@ class VolcanoGUI(tk.Tk):
                 continue
             rx, ry = c.winfo_rootx(), c.winfo_rooty()
             if rx <= event.x_root < rx + c.winfo_width() and ry <= event.y_root < ry + c.winfo_height():
-                c.yview_scroll(int(-event.delta / 120), "units")
+                if sf.scrollable():               # don't move panels that already fit
+                    c.yview_scroll(int(-event.delta / 120), "units")
                 return "break"
 
     # ----- tab 1: analysis configuration -----
@@ -1216,7 +1233,11 @@ class VolcanoGUI(tk.Tk):
                                                "Values outside are clipped to the ends.")
         v["legend_num"] = labeled_entry(fig, 7, "Legend # entries", "auto", tip="auto or integer",
                                         hint="Number of size-legend entries (FDR). 'auto' or an integer.")
-        v["dpi"] = labeled_combo(fig, 8, "DPI", [100, 150, 200, 300, 600], 200,
+        v["bubble_size_scale"] = labeled_entry(fig, 8, "Bubble size scale", "1.0",
+                                               hint="Multiplier for all circle sizes, legend included "
+                                                    "(1 = default, 2 = twice as big, 0.5 = half). Does not change "
+                                                    "the FDR values the sizes represent.")
+        v["dpi"] = labeled_combo(fig, 9, "DPI", [100, 150, 200, 300, 600], 200,
                                  hint="Resolution of the saved PNG (dots per inch). Higher = sharper, bigger file.")
 
         opt = ttk.LabelFrame(parent, text="Options")
