@@ -4,10 +4,22 @@ Self-contained desktop app for the DIA-NN proteomics pipeline. Configure an
 analysis, run it, and explore the volcano plot with **every** plot setting
 exposed. The figure is shown live in the window and also saved to PNG.
 
+## Download
+
+First, get the code from GitHub:
+
+1. Open **https://github.com/Hanfeng-Lin/proteomics_GUI**
+2. Click the green **Code** button → **Download ZIP**
+3. Unzip it somewhere convenient (e.g. your Desktop)
+
+(Prefer git? `git clone https://github.com/Hanfeng-Lin/proteomics_GUI.git`)
+
+Then follow **Requirements** and **Run** below.
+
 ## Contents
 
 ```
-diann_volcano_gui/
+proteomics_GUI/
 ├── start_gui.bat           ← double-click to launch (finds the 'proteomics' env)
 ├── gui.py                  ← the application
 ├── scripts/                ← analysis library the GUI calls
@@ -19,21 +31,29 @@ committed to the repo — supply your own via the **Browse...** button in tab 1.
 
 ## Requirements
 
-Recreate the environment with **conda** (recommended — this is the env the app was
-built and tested in, named `proteomics`):
+**1. Python environment (conda).** Recreate the env the app was built and tested
+in (named `proteomics`):
 
 ```bash
 conda env create -f environment.yml
 conda activate proteomics
 ```
 
+**2. R + limma (required).** Statistics use R/limma (a moderated t-test), so you
+must install R separately — it does **not** come with the conda env:
+
+1. Download and install **R** from CRAN: https://cran.r-project.org/
+2. In an R console, install the Bioconductor **limma** package:
+   ```r
+   if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+   BiocManager::install("limma")
+   ```
+3. Set the **`R_HOME`** environment variable to your R install folder (e.g.
+   `C:\Program Files\R\R-4.4.2`) so the app can find R.
+
 Notes:
 
 - Tkinter ships with Python — no install needed.
-- The **Use limma** option (on by default) additionally needs R, the `R_HOME`
-  environment variable, and the Bioconductor `limma` package (installed in R, not
-  via conda/pip). Untick **Use limma** to fall back to Student's t-test +
-  Benjamini–Hochberg.
 - `gseapy` (Enrichr/GSEA features) makes network calls when used.
 
 Once the `proteomics` env exists, `start_gui.bat` finds and activates it for you.
