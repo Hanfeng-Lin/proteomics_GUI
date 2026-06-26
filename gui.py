@@ -40,6 +40,17 @@ from scripts.plots.pca import generate_pca_plot
 from scripts.plots.bubble import bubble_dendro_plot
 
 
+def _version_suffix():
+    """Read the VERSION file next to this script; return '  (v1.0.0)' or ''."""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "VERSION"), encoding="utf-8") as f:
+            v = f.read().strip()
+        return f"  (v{v})" if v else ""
+    except Exception:
+        return ""
+
+
 # --------------------------------------------------------------------------- #
 # Parsing helpers (pure functions -- testable without a display)
 # --------------------------------------------------------------------------- #
@@ -671,7 +682,7 @@ class ScrollableFrame(ttk.Frame):
 class VolcanoGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("DIA-NN Proteomics  -  Volcano / Bubble Explorer")
+        self.title("DIA-NN Proteomics  -  Volcano / Bubble Explorer" + _version_suffix())
         self.geometry("1640x900")
 
         self.result = None      # AnalysisResult after a run
@@ -1025,6 +1036,24 @@ class VolcanoGUI(tk.Tk):
         var.trace_add("write", _upd)
         _upd()
 
+    @staticmethod
+    def _bind_enable(var, frame):
+        """Grey out every widget inside `frame` while the boolean `var` is False."""
+        def _apply(widget, on):
+            for child in widget.winfo_children():
+                try:                       # ttk widgets
+                    child.state(["!disabled" if on else "disabled"])
+                except Exception:
+                    try:                   # classic tk widgets
+                        child.configure(state="normal" if on else "disabled")
+                    except Exception:
+                        pass
+                _apply(child, on)
+        def _upd(*_a):
+            _apply(frame, bool(var.get()))
+        var.trace_add("write", _upd)
+        _upd()
+
     def _build_volcano_widgets(self, parent):
         v = self.vol_vars
 
@@ -1048,15 +1077,18 @@ class VolcanoGUI(tk.Tk):
         v["use_empirical_fdr"] = check(emp, 0, "Use empirical FDR curve", False,
                                        hint="Replace the straight cutoffs with a hyperbolic curve fitted by the "
                                             "wrong-side (decoy) method below, instead of fixed log2FC/FDR lines.")
-        v["fdr_alpha"] = labeled_entry(emp, 1, "FDR alpha", "0.05",
+        empf = ttk.Frame(emp)   # these only apply when the curve is enabled -> grey out otherwise
+        empf.grid(row=1, column=0, columnspan=3, sticky="w")
+        v["fdr_alpha"] = labeled_entry(empf, 0, "FDR alpha", "0.05",
                                        hint="Target empirical FDR for the fitted curve (e.g. 0.05).")
-        v["kappa"] = labeled_entry(emp, 2, "kappa", "1e-6",
+        v["kappa"] = labeled_entry(empf, 1, "kappa", "1e-6",
                                    hint="Small pseudocount used when estimating the empirical FDR ratio.")
-        v["p_value_cutoff"] = labeled_entry(emp, 3, "p_value_cutoff", "1",
+        v["p_value_cutoff"] = labeled_entry(empf, 2, "p_value_cutoff", "1",
                                             hint="Vertical offset (in -log10 P) of the empirical-FDR curve's asymptote.")
-        v["mode"] = labeled_entry(emp, 4, "Mode override", "Auto", tip="Auto / 0 / 1",
+        v["mode"] = labeled_entry(empf, 3, "Mode override", "Auto", tip="Auto / 0 / 1",
                                   hint="Side the curve is fit toward. Auto = use the analysis mode "
                                        "(0 degradation -> down side, 1 enrichment -> up side).")
+        self._bind_enable(v["use_empirical_fdr"], empf)
 
         axes = ttk.LabelFrame(parent, text="Axes")
         axes.pack(fill="x", padx=4, pady=4)
@@ -1140,42 +1172,41 @@ class VolcanoGUI(tk.Tk):
         v["color_bg"] = color_row(dots, 6, "Background colour", "grey",
                                   hint="Colour of the non-significant background dots (click to pick).")
 
-        lab = ttk.LabelFrame(parent, text="Labels")
-        lab.pack(fill="x", padx=4, pady=4)
-        v["label_topX_mid_fc"] = labeled_entry(lab, 0, "Label top-X mid FC", "", tip="blank = off",
+        gl = ttk.LabelFrame(parent, text="Gene labels (which to show)")
+        gl.pack(fill="x", padx=4, pady=4)
+        v["label_up"] = check(gl, 0, "Label up-regulated genes", True,
+                              hint="Add the significant up-regulated (red) genes to the text labels.")
+        v["label_down"] = check(gl, 1, "Label down-regulated genes", True,
+                                hint="Add the significant down-regulated (blue) genes to the text labels.")
+        v["label_imputed"] = check(gl, 2, "Label imputed genes", False,
+                                   hint="Add the imputed (orange) proteins to the text labels.")
+        v["label_topX_mid_fc"] = labeled_entry(gl, 3, "Label top-X mid FC", "", tip="blank = off",
                                                hint="Also label the X most significant 'mid' down-regulated proteins "
                                                     "(log2FC between -1 and -0.32). Blank/0 = off.")
-        v["label_most_extreme"] = labeled_entry(lab, 1, "Label most extreme (per side)", "", tip="blank = off",
+        v["label_most_extreme"] = labeled_entry(gl, 4, "Label most extreme (per side)", "", tip="blank = off",
                                                 hint="Label only the N points farthest from the origin on each side "
                                                      "(overrides the up/down label set). Blank = off.")
-        v["max_label"] = labeled_entry(lab, 2, "Max labels", "100",
+        v["max_label"] = labeled_entry(gl, 5, "Max labels", "100",
                                        hint="Skip drawing labels entirely if more than this many would be shown "
                                             "(prevents an unreadable, slow plot).")
-        v["file_suffix"] = labeled_entry(lab, 3, "File suffix", "",
-                                         hint="Extra text appended to the saved PNG file name.")
-        v["dpi"] = labeled_combo(lab, 4, "DPI", [100, 150, 200, 300, 600, 1200], 300,
-                                 hint="Resolution of the saved PNG (dots per inch). Higher = sharper, bigger file.")
 
-        place = ttk.LabelFrame(parent, text="Label selection & placement")
+        place = ttk.LabelFrame(parent, text="Label placement")
         place.pack(fill="x", padx=4, pady=4)
-        v["label_up"] = check(place, 0, "Label up-regulated genes", True,
-                              hint="Add the significant up-regulated (red) genes to the text labels.")
-        v["label_down"] = check(place, 1, "Label down-regulated genes", True,
-                                hint="Add the significant down-regulated (blue) genes to the text labels.")
-        v["label_imputed"] = check(place, 2, "Label imputed genes", False,
-                                   hint="Add the imputed (orange) proteins to the text labels.")
-        v["adjust_labels"] = check(place, 3, "Auto-arrange labels (adjustText)", True,
+        v["adjust_labels"] = check(place, 0, "Auto-arrange labels (adjustText)", True,
                                    hint="Reposition labels to avoid overlap (adjustText). Off = place at the point, "
                                         "no arrows -- much faster with many labels.")
-        v["adjust_arrows"] = check(place, 4, "Draw arrows to labels", True,
+        placf = ttk.Frame(place)   # arrow/force options only apply when auto-arrange is on
+        placf.grid(row=1, column=0, columnspan=3, sticky="w")
+        v["adjust_arrows"] = check(placf, 0, "Draw arrows to labels", True,
                                    hint="Draw thin connector lines from each moved label back to its point.")
-        v["adjust_force_text"] = labeled_entry(place, 5, "Repel force (text)", "1, 2",
+        v["adjust_force_text"] = labeled_entry(placf, 1, "Repel force (text)", "1, 2",
                                                tip="number or 'x, y'",
                                                hint="How strongly labels push apart from each other. "
                                                     "A number, or 'x, y' for separate horizontal/vertical force.")
-        v["adjust_force_static"] = labeled_entry(place, 6, "Repel force (points)", "1, 2",
+        v["adjust_force_static"] = labeled_entry(placf, 2, "Repel force (points)", "1, 2",
                                                  tip="number or 'x, y'",
                                                  hint="How strongly labels are pushed away from the data points.")
+        self._bind_enable(v["adjust_labels"], placf)
 
         fonts = ttk.LabelFrame(parent, text="Font sizes")
         fonts.pack(fill="x", padx=4, pady=4)
@@ -1186,6 +1217,13 @@ class VolcanoGUI(tk.Tk):
         v["legend_fontsize"] = labeled_entry(fonts, 3, "Legend", "12", hint="Font size of the legend.")
         v["gene_label_fontsize"] = labeled_entry(fonts, 4, "Gene labels", "14",
                                                  hint="Font size of the per-gene text labels on the plot.")
+
+        out = ttk.LabelFrame(parent, text="Output (saved PNG)")
+        out.pack(fill="x", padx=4, pady=4)
+        v["dpi"] = labeled_combo(out, 0, "DPI", [100, 150, 200, 300, 600, 1200], 300,
+                                 hint="Resolution of the saved PNG (dots per inch). Higher = sharper, bigger file.")
+        v["file_suffix"] = labeled_entry(out, 1, "File suffix", "",
+                                         hint="Extra text appended to the saved PNG file name.")
 
     # ----- tab 4: bubbleplot settings -----
     def _build_bubble_tab(self, tab):
