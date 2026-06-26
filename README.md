@@ -14,13 +14,16 @@ First, get the code from GitHub:
 
 (Prefer git? `git clone https://github.com/Hanfeng-Lin/proteomics_GUI.git`)
 
-Then follow **Requirements** and **Run** below.
+Then follow **Requirements** and **Run** below. To **update later**, double-click
+**`update.bat`** — it does a `git pull` if you cloned, otherwise it downloads and
+applies the latest ZIP (your data files and `proteomics_GUI_output` are kept).
 
 ## Contents
 
 ```
 proteomics_GUI/
 ├── start_gui.bat           ← double-click to launch (finds the 'proteomics' env)
+├── update.bat              ← double-click to pull the latest version from GitHub
 ├── gui.py                  ← the application
 ├── scripts/                ← analysis library the GUI calls
 └── environment.yml         ← conda environment spec (recreates the 'proteomics' env)
