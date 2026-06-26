@@ -174,13 +174,15 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
         found_labels = list(dict.fromkeys(found_labels))   # de-dupe, keep order
 
         if genes_not_found:
-            print(f"Could not find the following genes to highlight: {genes_not_found}")
+            # Use logging (not print) so the GUI Log box shows it. Name the
+            # comparison since "plot all" produces one volcano per pair.
+            logging.warning("Highlight genes not on the %s_vs_%s plot (not found or no value): %s",
+                            treatment_group, control_group, ", ".join(genes_not_found))
 
         if found_labels:
             highlight = df.loc[found_labels]
             plt.scatter(x=highlight[logFC], y=highlight[FDR].apply(lambda x:-np.log10(x)), color=color_highlight, zorder=5) # zorder makes them plot on top
         else:
-            logging.warning("None of the specified highlight genes were found in the data.")
             highlight = None
     else:
         highlight = None
