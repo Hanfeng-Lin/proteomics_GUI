@@ -1060,6 +1060,8 @@ class VolcanoGUI(tk.Tk):
         self.plot_btn = ttk.Button(bar, text="Plot selected", command=self._on_plot_volcano, state="disabled")
         self.plot_btn.pack(side="left", padx=3)
         Tooltip(self.plot_btn, "Plot a volcano for just the treatment/control pair selected below.")
+        ttk.Label(bar, text="  (hover a dot for its gene; click a dot to look it up in step 5)",
+                  foreground="#888").pack(side="left", padx=4)
 
         sel = ttk.Frame(tab)
         sel.pack(side="top", fill="x", padx=4, pady=4)
@@ -1409,21 +1411,35 @@ class VolcanoGUI(tk.Tk):
             return "" if v is None else str(v)
 
     def _resolve_protein(self, query):
-        """Resolve a UniProt accession or gene symbol to a Protein.Group index."""
+        """Resolve a UniProt accession or gene symbol to a Protein.Group index.
+        Accepts a ';'/','-joined token (e.g. 'TRAV8-2;TRAV8-4') and matches any part."""
         df = self.result.df_original
-        q = query.strip()
-        if q in df.index:
-            return q
-        # UniProt token inside a ';'-joined Protein.Group (e.g. 'A0A0B4J237;P01737')
-        for idx in df.index:
-            if q in str(idx).split(";"):
-                return idx
-        # Gene symbol match (Genes column may be ';'-separated), case-insensitive
-        if "Genes" in df.columns:
-            ql = q.lower()
-            for idx, g in df["Genes"].items():
-                if ql in [t.strip().lower() for t in str(g).split(";")]:
+
+        def _one(q):
+            q = q.strip()
+            if not q:
+                return None
+            if q in df.index:
+                return q
+            # UniProt token inside a ';'-joined Protein.Group (e.g. 'A0A0B4J237;P01737')
+            for idx in df.index:
+                if q in str(idx).split(";"):
                     return idx
+            # Gene symbol match (Genes column may be ';'-separated), case-insensitive
+            if "Genes" in df.columns:
+                ql = q.lower()
+                for idx, g in df["Genes"].items():
+                    if ql in [t.strip().lower() for t in str(g).split(";")]:
+                        return idx
+            return None
+
+        hit = _one(query)
+        if hit is not None:
+            return hit
+        for part in str(query).replace(",", ";").split(";"):   # try each member
+            hit = _one(part)
+            if hit is not None:
+                return hit
         return None
 
     def _on_lookup(self):
@@ -1782,8 +1798,9 @@ class VolcanoGUI(tk.Tk):
         self._plot_canvas = None   # an image view has no matplotlib canvas
         self._show_tab_area(key)
 
-    def _point_hover(self, canvas, xs, ys, labels):
-        """Generic: show labels[i] in a tooltip when hovering near point (xs[i], ys[i])."""
+    def _point_hover(self, canvas, xs, ys, labels, on_pick=None):
+        """Generic: show labels[i] in a tooltip when hovering near point (xs[i], ys[i]).
+        If on_pick is given, a left-click near a point calls on_pick(i)."""
         if canvas is None:
             return
         try:
@@ -1802,15 +1819,19 @@ class VolcanoGUI(tk.Tk):
                                 fontsize=9, zorder=20)
             annot.set_visible(False)
 
+            def _nearest(event):
+                disp = ax.transData.transform(pts)
+                d = np.hypot(disp[:, 0] - event.x, disp[:, 1] - event.y)
+                i = int(np.argmin(d))
+                return (i, d[i])
+
             def _on_move(event):
                 if event.inaxes is not ax:
                     if annot.get_visible():
                         annot.set_visible(False); canvas.draw_idle()
                     return
-                disp = ax.transData.transform(pts)
-                d = np.hypot(disp[:, 0] - event.x, disp[:, 1] - event.y)
-                i = int(np.argmin(d))
-                if d[i] <= 12:                       # within ~12 px of a point
+                i, dist = _nearest(event)
+                if dist <= 12:                       # within ~12 px of a point
                     annot.xy = (xs[i], ys[i])
                     annot.set_text(labels[i])
                     annot.set_visible(True)
@@ -1819,6 +1840,18 @@ class VolcanoGUI(tk.Tk):
                     annot.set_visible(False); canvas.draw_idle()
 
             canvas.mpl_connect("motion_notify_event", _on_move)
+
+            if on_pick is not None:
+                def _on_click(event):
+                    if event.inaxes is not ax or getattr(event, "button", None) != 1:
+                        return
+                    tb = getattr(canvas, "toolbar", None)   # ignore clicks while zoom/pan is active
+                    if tb is not None and getattr(tb, "mode", ""):
+                        return
+                    i, dist = _nearest(event)
+                    if dist <= 12:
+                        on_pick(i)
+                canvas.mpl_connect("button_press_event", _on_click)
         except Exception:
             pass
 
@@ -1838,8 +1871,27 @@ class VolcanoGUI(tk.Tk):
             return
         labels = [g if str(g).strip() else a
                   for g, a in zip(sub["Genes"].astype(str), sub.index.astype(str))]
+        accs = sub.index.astype(str).tolist()
+
+        def _on_pick(i):
+            # Prefer the gene label for display; fall back to the accession.
+            self._lookup_from_volcano(labels[i] or accs[i], treated, control)
+
         self._point_hover(canvas, sub[xcol].to_numpy(dtype=float),
-                          -np.log10(sub[fcol].to_numpy(dtype=float)), labels)
+                          -np.log10(sub[fcol].to_numpy(dtype=float)), labels, on_pick=_on_pick)
+
+    def _lookup_from_volcano(self, query, treated, control):
+        """Click a volcano dot -> jump to the lookup tab, prefilled, and run it."""
+        comp = f"{treated}_vs_{control}"
+        try:
+            if comp in list(self.lookup_comp.cget("values")):
+                self.lookup_comp.set(comp)
+        except Exception:
+            pass
+        self.lookup_query.set(str(query))
+        self.nb.select(4)                 # step 5: Raw data lookup
+        self.update_idletasks()
+        self._on_lookup()
 
     def _attach_hover_pca(self, canvas, pca_df):
         """Hover a PCA dot -> show its sample name."""
