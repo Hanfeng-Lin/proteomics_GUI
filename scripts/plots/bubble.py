@@ -24,7 +24,7 @@ from typing import Union
 from ..reference_data import g_loop_5res_noEC, g_loop_8res_noEC, RT_loop_5res
 
 
-def bubble_dendro_plot(SAR, config, SAR_suffix="", figure_filename="bubble_plot.png", fig_title="", fig_width=50, fig_height=50,
+def bubble_dendro_plot(SAR, config, df=None, SAR_suffix="", figure_filename="bubble_plot.png", fig_title="", fig_width=50, fig_height=50,
                        dendro_bubble_height_ratio=[1,3], bubble_legend_width_ratio=[20,1],
                        compound_labelsize=20, protein_labelsize=20,
                        colorFCrange=[-4,0], highlight_G_loop=0, highlight_RT_loop=0, rainbow_palette=0,
@@ -41,8 +41,13 @@ def bubble_dendro_plot(SAR, config, SAR_suffix="", figure_filename="bubble_plot.
 
     suffix_to_group = {suffix: cluster for cluster, suffixes in SAR.items() for suffix in suffixes}
 
-    # Preparing downregulated proteins for meta-analysis
-    df = pd.read_csv(config.file.split(".")[0]+"_analyzed.csv", sep=",", index_col=0)
+    # Preparing downregulated proteins for meta-analysis.
+    # Use the in-memory summary if given (GUI path); otherwise fall back to the
+    # <file>_analyzed.csv on disk (standalone/library use).
+    if df is None:
+        df = pd.read_csv(config.file.split(".")[0]+"_analyzed.csv", sep=",", index_col=0)
+    else:
+        df = df.copy()
 
     # Bubble plot table for x=treatment, y=protein, color=FC, size=FDR
     #df = df.drop(columns=df.filter(like="10uM").columns)

@@ -1740,12 +1740,9 @@ class VolcanoGUI(tk.Tk):
             return
         try:
             self._ensure_outdir_cwd()
-            # bubble_dendro_plot reads "<stem>_analyzed.csv" from the working dir;
-            # write the analysis summary there so it has data to plot.
-            analyzed = self.cfg.file.split(".")[0] + "_analyzed.csv"
-            self.result.summary.to_csv(analyzed)
+            # Pass the in-memory summary straight to the bubble plot (no CSV round-trip).
             plt.close("all")
-            bubble_dendro_plot(SAR, self.cfg, **kwargs)
+            bubble_dendro_plot(SAR, self.cfg, df=self.result.summary, **kwargs)
             self._embed(plt.gcf(), "bubble")
             logging.getLogger().info("Plotted bubble plot -> %s", kwargs["figure_filename"])
         except Exception:
