@@ -24,6 +24,7 @@ applies the latest ZIP (your data files and `proteomics_GUI_output` are kept).
 proteomics_GUI/
 ├── start_gui.bat           ← double-click to launch (finds the 'proteomics' env)
 ├── update.bat              ← double-click to pull the latest version from GitHub
+├── VERSION                 ← current version string (used for the update check)
 ├── gui.py                  ← the application
 ├── scripts/                ← analysis library the GUI calls
 └── environment.yml         ← conda environment spec (recreates the 'proteomics' env)
@@ -63,8 +64,10 @@ Once the `proteomics` env exists, `start_gui.bat` finds and activates it for you
 
 ## Run
 
-Double-click **`start_gui.bat`** (it finds the `proteomics` conda env and
-launches the app), or from a shell with the right Python:
+Double-click **`start_gui.bat`**. It checks that Anaconda and the `proteomics`
+env are present (and prints clear setup instructions if not), then compares the
+local **`VERSION`** with the one on GitHub — if a newer version exists it asks
+whether to update before launching. Or, from a shell with the right Python:
 
 ```bash
 python gui.py
