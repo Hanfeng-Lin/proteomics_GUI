@@ -127,17 +127,57 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
         plt.scatter(x=lowabundance_down[logFC],y=lowabundance_down[FDR].apply(lambda x:-np.log10(x)),s=3,label="Down-regulated, protein level<"+str(protein_level_cutoff),color="turquoise")
 
     if highlight_genes:
-        # Find which of the requested genes are actually in the DataFrame index
-        genes_found = [gene for gene in highlight_genes if gene in df.index and not pd.isna(df.loc[gene, logFC])]
-        # Find which genes were not found so you can report them
-        genes_not_found = [gene for gene in highlight_genes if gene not in df.index or pd.isna(df.loc[gene, logFC])]
-        # If any of the requested genes were not found, log a warning
+        # Accept either a UniProt accession (the index / Protein.Group) OR a gene
+        # name (the 'Genes' column). A protein group can list several of each,
+        # ';'-joined (e.g. Genes = "CENPVL1;CENPVL2;CENPVL3"). We index BOTH the
+        # full string and every individual part, so any one member matches the row;
+        # gene names match case-insensitively.
+        acc_map = {}                      # accession (full + each part) -> row label
+        for label in df.index:
+            acc_map.setdefault(str(label).strip(), label)
+            for part in str(label).split(';'):
+                acc_map.setdefault(part.strip(), label)
+        gene_map = {}                     # UPPER(gene, full + each part) -> row label
+        if 'Genes' in df.columns:
+            for label, genes in df['Genes'].items():
+                if pd.isna(genes):
+                    continue
+                gstr = str(genes).strip()
+                gene_map.setdefault(gstr.upper(), label)
+                for part in gstr.split(';'):
+                    gene_map.setdefault(part.strip().upper(), label)
+
+        def _resolve(tok):
+            tok = str(tok).strip()
+            if not tok:
+                return None
+            label = acc_map.get(tok) or gene_map.get(tok.upper())
+            if label is not None:
+                return label
+            # The entered token may itself be ';'- or ','-joined -> match any member.
+            for part in tok.replace(',', ';').split(';'):
+                part = part.strip()
+                if not part:
+                    continue
+                label = acc_map.get(part) or gene_map.get(part.upper())
+                if label is not None:
+                    return label
+            return None
+
+        found_labels, genes_not_found = [], []
+        for token in highlight_genes:
+            label = _resolve(token)
+            if label is not None and not pd.isna(df.loc[label, logFC]):
+                found_labels.append(label)
+            else:
+                genes_not_found.append(str(token).strip())
+        found_labels = list(dict.fromkeys(found_labels))   # de-dupe, keep order
+
         if genes_not_found:
             print(f"Could not find the following genes to highlight: {genes_not_found}")
 
-        # Proceed to plot only the genes that were actually found
-        if genes_found:
-            highlight = df.loc[genes_found]
+        if found_labels:
+            highlight = df.loc[found_labels]
             plt.scatter(x=highlight[logFC], y=highlight[FDR].apply(lambda x:-np.log10(x)), color=color_highlight, zorder=5) # zorder makes them plot on top
         else:
             logging.warning("None of the specified highlight genes were found in the data.")
