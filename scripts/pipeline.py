@@ -62,8 +62,11 @@ def _save_workflow_excel(config, df_original, group_columns, imputed_dataframes,
 
     logger.info(f"Saving results to {output_excel_path}...")
     with pd.ExcelWriter(output_excel_path, engine='openpyxl') as writer:
-        # Sheet 1: The summary of fold changes (without the index column).
-        df_final_results.to_excel(writer, sheet_name='Fold_Change_Summary', index=False)
+        # Sheet 1: the fold-change/stats summary. Surface the UniProt accession
+        # (the index) as the first column.
+        summary_out = df_final_results.copy()
+        summary_out.index.name = "Protein.Group"
+        summary_out.reset_index().to_excel(writer, sheet_name='Fold_Change_Summary', index=False)
 
         # Subsequent sheets: The raw imputed data for each comparison.
         for comparison_name, imputed_df in imputed_dataframes.items():
@@ -95,8 +98,9 @@ def _save_workflow_excel(config, df_original, group_columns, imputed_dataframes,
             # Truncate sheet name to Excel's 31-character limit.
             sheet_name = comparison_name[:31]
 
-            # Save the clean subset to the new sheet (without the index column).
-            df_subset.to_excel(writer, sheet_name=sheet_name, index=False)
+            # Save the subset, with the UniProt accession (index) as the first column.
+            df_subset.index.name = "Protein.Group"
+            df_subset.reset_index().to_excel(writer, sheet_name=sheet_name, index=False)
 
     print(f"All results saved to {output_excel_path}")
     return output_excel_path
