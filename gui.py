@@ -195,8 +195,8 @@ def build_bubble_params(v):
         fig_height=_req_float(v["fig_height"], 50),
         dendro_bubble_height_ratio=_num_pair(v["dendro_bubble_height_ratio"], "dendro/bubble height ratio"),
         bubble_legend_width_ratio=_num_pair(v["bubble_legend_width_ratio"], "bubble/legend width ratio"),
-        compound_labelsize=_req_float(v["compound_labelsize"], 20),
-        protein_labelsize=_req_float(v["protein_labelsize"], 20),
+        compound_labelsize=_req_float(v["compound_labelsize"], 10),
+        protein_labelsize=_req_float(v["protein_labelsize"], 10),
         colorFCrange=_num_pair(v["colorFCrange"], "color FC range"),
         highlight_G_loop=int(float(str(v["highlight_G_loop"]).strip() or 0)),
         highlight_RT_loop=int(float(str(v["highlight_RT_loop"]).strip() or 0)),
@@ -204,11 +204,12 @@ def build_bubble_params(v):
         invert_xy=bool(v["invert_xy"]),
         selected_genes=_genes(v["selected_genes"]),
         legend_num=legend_num,
-        title_fontsize=_req_float(v["title_fontsize"], 30),
-        axis_fontsize=_req_float(v["axis_fontsize"], 30),
-        colorbar_label_fontsize=_req_float(v["colorbar_label_fontsize"], 30),
-        colorbar_tick_fontsize=_req_float(v["colorbar_tick_fontsize"], 30),
-        legend_fontsize=_req_float(v["legend_fontsize"], 30),
+        protein_label="gene" if str(v.get("protein_label_mode", "")).startswith("Gene") else "description_gene",
+        title_fontsize=_req_float(v["title_fontsize"], 14),
+        axis_fontsize=_req_float(v["axis_fontsize"], 12),
+        colorbar_label_fontsize=_req_float(v["colorbar_label_fontsize"], 12),
+        colorbar_tick_fontsize=_req_float(v["colorbar_tick_fontsize"], 10),
+        legend_fontsize=_req_float(v["legend_fontsize"], 10),
         dpi=_req_int(v["dpi"], 200),
     )
     return SAR, kwargs
@@ -1210,16 +1211,12 @@ class VolcanoGUI(tk.Tk):
                                                              "e.g. '1, 3'. Ignored when axes are inverted.")
         v["bubble_legend_width_ratio"] = labeled_entry(fig, 5, "Bubble:legend width", "20, 1",
                                                        hint="Width ratio of the bubble grid to the legend/colorbar column.")
-        v["compound_labelsize"] = labeled_entry(fig, 6, "Compound label size", "20",
-                                                hint="Font size of the treatment/compound axis labels.")
-        v["protein_labelsize"] = labeled_entry(fig, 7, "Protein label size", "20",
-                                               hint="Font size of the protein axis labels.")
-        v["colorFCrange"] = labeled_entry(fig, 8, "Color FC range", "-4, 0",
+        v["colorFCrange"] = labeled_entry(fig, 6, "Color FC range", "-4, 0",
                                           hint="log2FC range mapped to the colour scale, e.g. '-4, 0'. "
                                                "Values outside are clipped to the ends.")
-        v["legend_num"] = labeled_entry(fig, 9, "Legend # entries", "auto", tip="auto or integer",
+        v["legend_num"] = labeled_entry(fig, 7, "Legend # entries", "auto", tip="auto or integer",
                                         hint="Number of size-legend entries (FDR). 'auto' or an integer.")
-        v["dpi"] = labeled_combo(fig, 10, "DPI", [100, 150, 200, 300, 600], 200,
+        v["dpi"] = labeled_combo(fig, 8, "DPI", [100, 150, 200, 300, 600], 200,
                                  hint="Resolution of the saved PNG (dots per inch). Higher = sharper, bigger file.")
 
         opt = ttk.LabelFrame(parent, text="Options")
@@ -1234,22 +1231,28 @@ class VolcanoGUI(tk.Tk):
         v["invert_xy"] = check(opt, 3, "Invert axes (no dendrogram)", False,
                                hint="Swap the x/y axes (treatments on x, proteins on y) and omit the dendrogram.")
         v["selected_genes"] = labeled_entry(opt, 4, "Selected genes only", "", width=28,
-                                            tip="'Desc | GENE', comma-separated; blank = all",
-                                            hint="Restrict the plot to these proteins, written as "
-                                                 "'Description | GENE' (the row labels), comma-separated. Blank = all.")
+                                            tip="row labels, comma-separated; blank = all",
+                                            hint="Restrict the plot to these proteins, written exactly as the row "
+                                                 "labels (see 'Protein label' below), comma-separated. Blank = all.")
+        v["protein_label_mode"] = labeled_combo(opt, 5, "Protein label",
+                                                ["Description | Gene", "Gene only"], "Description | Gene", width=18,
+                                                hint="Row label for each protein: the full 'Description | Gene', or just "
+                                                     "the gene name.")
 
         fonts = ttk.LabelFrame(parent, text="Font sizes")
         fonts.pack(fill="x", padx=4, pady=4)
-        ttk.Label(fonts, text="(compound / protein label sizes are in the Figure box above)",
-                  foreground="#888").grid(row=0, column=0, columnspan=3, sticky="w", padx=4)
-        v["title_fontsize"] = labeled_entry(fonts, 1, "Title", "30", hint="Font size of the plot title.")
-        v["axis_fontsize"] = labeled_entry(fonts, 2, "Distance axis", "30",
+        v["title_fontsize"] = labeled_entry(fonts, 0, "Title", "14", hint="Font size of the plot title.")
+        v["axis_fontsize"] = labeled_entry(fonts, 1, "Distance axis", "12",
                                            hint="Font size of the dendrogram 'Distance' axis label.")
-        v["colorbar_label_fontsize"] = labeled_entry(fonts, 3, "Colorbar label", "30",
+        v["compound_labelsize"] = labeled_entry(fonts, 2, "Compound labels", "10",
+                                                hint="Font size of the treatment/compound axis labels.")
+        v["protein_labelsize"] = labeled_entry(fonts, 3, "Protein labels", "10",
+                                               hint="Font size of the protein axis labels.")
+        v["colorbar_label_fontsize"] = labeled_entry(fonts, 4, "Colorbar label", "12",
                                                      hint="Font size of the 'Log2FC Value' colorbar label.")
-        v["colorbar_tick_fontsize"] = labeled_entry(fonts, 4, "Colorbar ticks", "30",
+        v["colorbar_tick_fontsize"] = labeled_entry(fonts, 5, "Colorbar ticks", "10",
                                                     hint="Font size of the colorbar tick numbers.")
-        v["legend_fontsize"] = labeled_entry(fonts, 5, "Legend", "30",
+        v["legend_fontsize"] = labeled_entry(fonts, 6, "Legend", "10",
                                              hint="Font size of the FDR size-legend entries.")
 
     # ----- tab 5: raw data lookup -----

@@ -26,11 +26,12 @@ from ..reference_data import g_loop_5res_noEC, g_loop_8res_noEC, RT_loop_5res
 
 def bubble_dendro_plot(SAR, config, df=None, SAR_suffix="", figure_filename="bubble_plot.png", fig_title="", fig_width=50, fig_height=50,
                        dendro_bubble_height_ratio=[1,3], bubble_legend_width_ratio=[20,1],
-                       compound_labelsize=20, protein_labelsize=20,
+                       compound_labelsize=10, protein_labelsize=10,
                        colorFCrange=[-4,0], highlight_G_loop=0, highlight_RT_loop=0, rainbow_palette=0,
                        invert_xy=False, selected_genes=[], legend_num: Union[str, int] = "auto",
-                       title_fontsize=30, axis_fontsize=30, colorbar_label_fontsize=30,
-                       colorbar_tick_fontsize=30, legend_fontsize=30, dpi=200):
+                       protein_label="description_gene",
+                       title_fontsize=14, axis_fontsize=12, colorbar_label_fontsize=12,
+                       colorbar_tick_fontsize=10, legend_fontsize=10, dpi=200):
     # SAR_suffix="_1uM_vs_DMSO"
     # highlight_G_loop can be 0:none, 1: 5res-list, 2: 8res-list
     # invert_xy: if True, swap the x and y axes and do not draw the dendrogram
@@ -71,9 +72,13 @@ def bubble_dendro_plot(SAR, config, df=None, SAR_suffix="", figure_filename="bub
     df_protein_downreg = df[mask]
     print(df_protein_downreg.shape)
 
-    df_protein_downreg["Description_Genes"] = (
-        df_protein_downreg["First.Protein.Description"].fillna("") + " | " + df_protein_downreg["Genes"].fillna("")
-    )
+    # Row label: gene only, or "description | gene".
+    if protein_label == "gene":
+        df_protein_downreg["Description_Genes"] = df_protein_downreg["Genes"].fillna("")
+    else:
+        df_protein_downreg["Description_Genes"] = (
+            df_protein_downreg["First.Protein.Description"].fillna("") + " | " + df_protein_downreg["Genes"].fillna("")
+        )
 
     # Melt the DataFrame for plotting
     df_protein_downreg = df_protein_downreg.reset_index()
