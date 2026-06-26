@@ -27,10 +27,17 @@ import contextvars
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, colorchooser
 
+import numpy as np
 import matplotlib
 matplotlib.use("Agg")  # figures are embedded manually; no stray windows
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+
+try:
+    from PIL import Image, ImageTk
+    _HAS_PIL = True
+except Exception:
+    _HAS_PIL = False
 
 # Make the package importable when running this file directly.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -444,6 +451,20 @@ def labeled_combo(parent, row, label, values, default, width=8, hint=None):
     if hint:
         Tooltip(lbl, hint)
         Tooltip(cb, hint)
+    return var
+
+
+def labeled_slider(parent, row, label, frm, to, default, resolution=0.1, length=160, hint=None):
+    """A label + a horizontal slider that shows its current value; returns the DoubleVar."""
+    lbl = ttk.Label(parent, text=label)
+    lbl.grid(row=row, column=0, sticky="w", padx=4, pady=2)
+    var = tk.DoubleVar(value=default)
+    sld = tk.Scale(parent, from_=frm, to=to, resolution=resolution, orient="horizontal",
+                   variable=var, showvalue=True, length=length)
+    sld.grid(row=row, column=1, sticky="w", padx=4, pady=2)
+    if hint:
+        Tooltip(lbl, hint)
+        Tooltip(sld, hint)
     return var
 
 
@@ -1150,9 +1171,11 @@ class VolcanoGUI(tk.Tk):
         self._bind_show(v["highlight_RTloops"], rf)
 
         v["highlight_genes"] = labeled_entry(hi, 11, "Highlight genes", "", width=28,
-                                             tip="UniProt IDs, comma-separated",
+                                             tip="UniProt IDs or gene names, comma-separated",
                                              hint="Specific proteins to mark and always label (colour = 'Highlight "
-                                                  "colour' in the Dots section). Comma-separated UniProt IDs.")
+                                                  "colour' in the Dots section). Comma-separated UniProt accessions "
+                                                  "(e.g. P51617) or gene names (e.g. IRAK1); gene names are "
+                                                  "case-insensitive.")
 
         dots = ttk.LabelFrame(parent, text="Dots (size, transparency, colours)")
         dots.pack(fill="x", padx=4, pady=4)
@@ -1271,10 +1294,10 @@ class VolcanoGUI(tk.Tk):
                                                "Values outside are clipped to the ends.")
         v["legend_num"] = labeled_entry(fig, 7, "Legend # entries", "auto", tip="auto or integer",
                                         hint="Number of size-legend entries (FDR). 'auto' or an integer.")
-        v["bubble_size_scale"] = labeled_entry(fig, 8, "Bubble size scale", "1.0",
-                                               hint="Multiplier for all circle sizes, legend included "
-                                                    "(1 = default, 2 = twice as big, 0.5 = half). Does not change "
-                                                    "the FDR values the sizes represent.")
+        v["bubble_size_scale"] = labeled_slider(fig, 8, "Bubble size scale", 0.1, 5.0, 1.0, resolution=0.1,
+                                                hint="Multiplier for all circle sizes, legend included "
+                                                     "(1 = default, 2 = twice as big, 0.5 = half). Does not change "
+                                                     "the FDR values the sizes represent.")
         v["dpi"] = labeled_combo(fig, 9, "DPI", [100, 150, 200, 300, 600], 200,
                                  hint="Resolution of the saved PNG (dots per inch). Higher = sharper, bigger file.")
 
@@ -1697,6 +1720,90 @@ class VolcanoGUI(tk.Tk):
         self._plot_canvas = self._tab_canvases[-1] if self._tab_canvases else None
         self._show_tab_area(key)
 
+    def _embed_image(self, path, key):
+        """Show a saved PNG (scaled to fit the panel, aspect preserved) instead of
+        a live re-render -- so the preview matches the exact saved figure."""
+        container = self._tab_area(key)
+        holder = ttk.Frame(container)
+        holder.pack(side="top", fill="both", expand=True)
+        lbl = ttk.Label(holder, anchor="center")
+        lbl.pack(fill="both", expand=True)
+        try:
+            base = Image.open(path); base.load()
+        except Exception:
+            lbl.configure(text=f"Could not load image:\n{path}")
+            self._plot_canvas = None
+            self._show_tab_area(key)
+            return
+        last = [0, 0]
+
+        def _fit(_evt=None):
+            W, H = holder.winfo_width(), holder.winfo_height()
+            if W <= 1 or H <= 1:
+                return
+            iw, ih = base.size
+            s = min(W / iw, H / ih)
+            nw, nh = max(1, int(iw * s)), max(1, int(ih * s))
+            if abs(nw - last[0]) < 2 and abs(nh - last[1]) < 2:
+                return
+            last[0], last[1] = nw, nh
+            photo = ImageTk.PhotoImage(base.resize((nw, nh), Image.LANCZOS))
+            lbl.configure(image=photo); lbl.image = photo
+
+        holder.bind("<Configure>", _fit)
+        self.after(10, _fit)
+        self._plot_canvas = None   # an image view has no matplotlib canvas
+        self._show_tab_area(key)
+
+    def _attach_hover(self, canvas, treated, control):
+        """Show the gene name in a tooltip when hovering a dot on a volcano canvas."""
+        if self.result is None or canvas is None:
+            return
+        try:
+            fig = canvas.figure
+            if not fig.axes:
+                return
+            ax = fig.axes[0]
+            df = self.result.summary
+            xcol = f"log2FC_{treated}_vs_{control}"
+            fcol = (f"bh_FDR_{treated}_vs_{control}" if getattr(self.cfg, "output_adjpval", True)
+                    else f"Pvalue_{treated}_vs_{control}")
+            if xcol not in df.columns or fcol not in df.columns:
+                return
+            sub = df[[xcol, fcol, "Genes"]].copy()
+            sub = sub[sub[xcol].notna() & sub[fcol].notna() & (sub[fcol] > 0)]
+            if sub.empty:
+                return
+            xs = sub[xcol].to_numpy(dtype=float)
+            ys = -np.log10(sub[fcol].to_numpy(dtype=float))
+            genes = [g if str(g).strip() else a
+                     for g, a in zip(sub["Genes"].astype(str), sub.index.astype(str))]
+            pts = np.column_stack([xs, ys])
+            annot = ax.annotate("", xy=(0, 0), xytext=(12, 12), textcoords="offset points",
+                                bbox=dict(boxstyle="round", fc="#ffffe0", ec="0.5", alpha=0.95),
+                                fontsize=9, zorder=20)
+            annot.set_visible(False)
+
+            def _on_move(event):
+                if event.inaxes is not ax:
+                    if annot.get_visible():
+                        annot.set_visible(False); canvas.draw_idle()
+                    return
+                disp = ax.transData.transform(pts)
+                d = np.hypot(disp[:, 0] - event.x, disp[:, 1] - event.y)
+                i = int(np.argmin(d))
+                if d[i] <= 12:                       # within ~12 px of a dot
+                    annot.xy = (xs[i], ys[i])
+                    annot.set_text(genes[i])
+                    annot.set_visible(True)
+                    canvas.draw_idle()
+                elif annot.get_visible():
+                    annot.set_visible(False); canvas.draw_idle()
+
+            canvas.mpl_connect("motion_notify_event", _on_move)
+        except Exception:
+            pass
+
     def _on_plot_all(self):
         """Generate a volcano for every comparison using the current settings."""
         if self.result is None:
@@ -1733,6 +1840,9 @@ class VolcanoGUI(tk.Tk):
 
         if items:
             self._embed_notebook(items)
+            for (name, _fig), canvas in zip(items, self._tab_canvases):
+                t, c = name.split("_vs_")
+                self._attach_hover(canvas, t, c)
         logging.getLogger().info("Plotted %d/%d comparisons (PNGs saved).", len(items), len(comparisons))
         if errors:
             messagebox.showwarning("Some comparisons failed",
@@ -1763,6 +1873,7 @@ class VolcanoGUI(tk.Tk):
                 **params,
             )
             self._embed(plt.gcf(), "volcano")
+            self._attach_hover(self._plot_canvas, treated, control)
             logging.getLogger().info("Plotted volcano %s vs %s", treated, control)
         except Exception:
             self.log_q.put(traceback.format_exc() + "\n")
@@ -1805,7 +1916,14 @@ class VolcanoGUI(tk.Tk):
             # Pass the in-memory summary straight to the bubble plot (no CSV round-trip).
             plt.close("all")
             bubble_dendro_plot(SAR, self.cfg, df=self.result.summary, **kwargs)
-            self._embed(plt.gcf(), "bubble")
+            # Show the exact saved PNG (preserves the requested figure aspect, unlike
+            # a fit-to-panel re-render). Fall back to a live embed if Pillow is absent.
+            png = os.path.abspath(kwargs["figure_filename"])
+            if _HAS_PIL and os.path.exists(png):
+                plt.close("all")
+                self._embed_image(png, "bubble")
+            else:
+                self._embed(plt.gcf(), "bubble")
             logging.getLogger().info("Plotted bubble plot -> %s", kwargs["figure_filename"])
         except Exception:
             self.log_q.put(traceback.format_exc() + "\n")
