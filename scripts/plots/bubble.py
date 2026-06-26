@@ -191,7 +191,8 @@ def bubble_dendro_plot(SAR, config, df=None, SAR_suffix="", figure_filename="bub
 
     # Plotting the bubble scatter plot with (x, y) depending on invert_xy.
     # Circle area = -log10(FDR) * base; bubble_size_scale enlarges/shrinks them all.
-    _size_base = 500 * bubble_size_scale
+    # Base 100 makes scale=1.0 the comfortable default (was 500 * 0.2).
+    _size_base = 100 * bubble_size_scale
     if not invert_xy:
         scatter = ax_bubble.scatter(
             melted_log2FC["Description_Genes"],  # x-axis: protein descriptions
