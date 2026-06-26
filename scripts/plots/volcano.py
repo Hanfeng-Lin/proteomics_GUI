@@ -42,7 +42,11 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
                  highlight_kinase=False, highlight_ub=False, highlight_Gloops=False, highlight_RTloops=False, label_topX_mid_fc=None, max_label=100, label_most_extreme=None,
                  title_fontsize=24, axis_label_fontsize=20, tick_fontsize=16, legend_fontsize=12, gene_label_fontsize=14,
                  label_up=True, label_down=True, label_imputed=False,
-                 adjust_labels=True, adjust_force_text=(1, 2), adjust_force_static=(1, 2), adjust_arrows=True):
+                 adjust_labels=True, adjust_force_text=(1, 2), adjust_force_static=(1, 2), adjust_arrows=True,
+                 dpi=None,
+                 dot_size=40, dot_alpha=0.5,
+                 color_bg="grey", color_up="red", color_down="blue",
+                 color_imputed="orange", color_highlight="green"):
     # Resolve settings that the notebook bound from globals.
     if mode is None:
         mode = config.mode
@@ -62,11 +66,11 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
     y_max = df[FDR].apply(lambda x:-np.log10(x)).max()
 
     plt.figure(figsize=(12, 9))
-    plt.scatter(x=df[logFC],y=df[FDR].apply(lambda x:-np.log10(x)),s=40,alpha=0.5, color="grey")
+    plt.scatter(x=df[logFC],y=df[FDR].apply(lambda x:-np.log10(x)),s=dot_size,alpha=dot_alpha, color=color_bg)
 
     if logFC_cutoff2:
         slight_down = df[(df[logFC]<=-logFC_cutoff2)&(df[FDR]<=FDR_cutoff)]
-        plt.scatter(x=slight_down[logFC],y=slight_down[FDR].apply(lambda x:-np.log10(x)),s=3,label=">35% Down-regulated",color="blue")
+        plt.scatter(x=slight_down[logFC],y=slight_down[FDR].apply(lambda x:-np.log10(x)),s=3,label=">35% Down-regulated",color=color_down)
     else:
         slight_down = None
 
@@ -75,9 +79,9 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
     if logFC_cutoff and not use_empirical_fdr:
         up = df[(df[logFC]>=logFC_cutoff)&(df[FDR]<=FDR_cutoff)]
         down = df[(df[logFC]<=-logFC_cutoff)&(df[FDR]<=FDR_cutoff)]
-        plt.scatter(x=up[logFC],y=up[FDR].apply(lambda x:-np.log10(x)),s=40,alpha=0.5, label="Up-regulated",color="red")
+        plt.scatter(x=up[logFC],y=up[FDR].apply(lambda x:-np.log10(x)),s=dot_size,alpha=dot_alpha, label="Up-regulated",color=color_up)
         if not (logFC_cutoff2 or protein_level_cutoff):
-            plt.scatter(x=down[logFC],y=down[FDR].apply(lambda x:-np.log10(x)),s=40,alpha=0.5,label="Down-regulated",color="blue")
+            plt.scatter(x=down[logFC],y=down[FDR].apply(lambda x:-np.log10(x)),s=dot_size,alpha=dot_alpha,label="Down-regulated",color=color_down)
         plt.axvline(-logFC_cutoff,color="grey",linestyle="--")
         plt.axvline(logFC_cutoff,color="grey",linestyle="--")
 
@@ -111,13 +115,13 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7))
         up = df[(df[FDR].apply(lambda x:-np.log10(x))>c/(df[logFC]-x0)+p_value_cutoff) & (df[logFC] > x0)]
         down = df[(df[FDR].apply(lambda x:-np.log10(x))>c/(-df[logFC]-x0)+p_value_cutoff) & (df[logFC] < -x0)]
-        plt.scatter(x=up[logFC],y=up[FDR].apply(lambda x:-np.log10(x)),s=40,alpha=0.5, label="Up-regulated",color="red")
+        plt.scatter(x=up[logFC],y=up[FDR].apply(lambda x:-np.log10(x)),s=dot_size,alpha=dot_alpha, label="Up-regulated",color=color_up)
         if not (logFC_cutoff2 or protein_level_cutoff):
-            plt.scatter(x=down[logFC],y=down[FDR].apply(lambda x:-np.log10(x)),s=40,alpha=0.5,label="Down-regulated",color="blue")
+            plt.scatter(x=down[logFC],y=down[FDR].apply(lambda x:-np.log10(x)),s=dot_size,alpha=dot_alpha,label="Down-regulated",color=color_down)
 
     if protein_level_cutoff:
         lowabundance_down=df[(df[logFC]<=-logFC_cutoff) & (df[FDR]<=FDR_cutoff) & (df[group_columns[control_group]].mean(axis=1)<1000)]
-        plt.scatter(x=down[logFC],y=down[FDR].apply(lambda x:-np.log10(x)),s=3,label="Down-regulated",color="blue")
+        plt.scatter(x=down[logFC],y=down[FDR].apply(lambda x:-np.log10(x)),s=3,label="Down-regulated",color=color_down)
         plt.scatter(x=lowabundance_down[logFC],y=lowabundance_down[FDR].apply(lambda x:-np.log10(x)),s=3,label="Down-regulated, protein level<"+str(protein_level_cutoff),color="turquoise")
 
     if highlight_genes:
@@ -132,7 +136,7 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
         # Proceed to plot only the genes that were actually found
         if genes_found:
             highlight = df.loc[genes_found]
-            plt.scatter(x=highlight[logFC], y=highlight[FDR].apply(lambda x:-np.log10(x)), color='green', zorder=5) # zorder makes them plot on top
+            plt.scatter(x=highlight[logFC], y=highlight[FDR].apply(lambda x:-np.log10(x)), color=color_highlight, zorder=5) # zorder makes them plot on top
         else:
             logging.warning("None of the specified highlight genes were found in the data.")
             highlight = None
@@ -141,7 +145,7 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
 
     if imputation_option:
         imputation_proteins = df.loc[imputation_dict[treatment_group+"_vs_"+control_group]]
-        plt.scatter(x=imputation_proteins[logFC], y=imputation_proteins[FDR].apply(lambda x:-np.log10(x)), s=30, color='orange', label="Imputation from missing value")
+        plt.scatter(x=imputation_proteins[logFC], y=imputation_proteins[FDR].apply(lambda x:-np.log10(x)), s=30, color=color_imputed, label="Imputation from missing value")
     else:
         imputation_proteins = None
 
@@ -250,4 +254,4 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
     if imputation_option:
         imputation_suffix="_imputation"
     rep_suffix="_"+str(len(group_columns[control_group]))+"rep"
-    plt.savefig(logFC+file_suffix+imputation_suffix+rep_suffix+'.png', transparent=True)
+    plt.savefig(logFC+file_suffix+imputation_suffix+rep_suffix+'.png', transparent=True, dpi=dpi)

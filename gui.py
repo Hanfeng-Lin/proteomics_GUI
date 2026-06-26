@@ -140,6 +140,14 @@ def build_volcano_params(v):
         adjust_arrows=bool(v["adjust_arrows"]),
         adjust_force_text=_force(v["adjust_force_text"], (1, 2)),
         adjust_force_static=_force(v["adjust_force_static"], (1, 2)),
+        dpi=_req_int(v["dpi"], 300),
+        dot_size=_req_float(v["dot_size"], 40),
+        dot_alpha=_req_float(v["dot_alpha"], 0.5),
+        color_bg=str(v["color_bg"]),
+        color_up=str(v["color_up"]),
+        color_down=str(v["color_down"]),
+        color_imputed=str(v["color_imputed"]),
+        color_highlight=str(v["color_highlight"]),
         title_fontsize=_req_float(v["title_fontsize"], 24),
         axis_label_fontsize=_req_float(v["axis_label_fontsize"], 20),
         tick_fontsize=_req_float(v["tick_fontsize"], 16),
@@ -193,6 +201,7 @@ def build_bubble_params(v):
         colorbar_label_fontsize=_req_float(v["colorbar_label_fontsize"], 30),
         colorbar_tick_fontsize=_req_float(v["colorbar_tick_fontsize"], 30),
         legend_fontsize=_req_float(v["legend_fontsize"], 30),
+        dpi=_req_int(v["dpi"], 200),
     )
     return SAR, kwargs
 
@@ -351,6 +360,19 @@ def check(parent, row, label, default=False, hint=None):
     cb = ttk.Checkbutton(parent, text=label, variable=var)
     cb.grid(row=row, column=0, columnspan=3, sticky="w", padx=4, pady=1)
     if hint:
+        Tooltip(cb, hint)
+    return var
+
+
+def labeled_combo(parent, row, label, values, default, width=8, hint=None):
+    lbl = ttk.Label(parent, text=label)
+    lbl.grid(row=row, column=0, sticky="w", padx=4, pady=2)
+    var = tk.StringVar(value=str(default))
+    cb = ttk.Combobox(parent, textvariable=var, values=[str(v) for v in values],
+                      state="readonly", width=width)
+    cb.grid(row=row, column=1, sticky="w", padx=4, pady=2)
+    if hint:
+        Tooltip(lbl, hint)
         Tooltip(cb, hint)
     return var
 
@@ -862,6 +884,8 @@ class VolcanoGUI(tk.Tk):
                                       hint="File name for the saved PCA image, written to the outputs folder.")
         p["text"] = check(box, 2, "Label samples on the plot", True,
                           hint="Annotate each point with its sample name (uses adjustText to avoid overlap).")
+        p["dpi"] = labeled_combo(box, 3, "DPI", [100, 150, 200, 300, 600, 1200], 300,
+                                 hint="Resolution of the saved PNG (dots per inch). Higher = sharper, bigger file.")
 
         fonts = ttk.LabelFrame(inner, text="Font sizes")
         fonts.pack(fill="x", padx=4, pady=4)
@@ -970,6 +994,26 @@ class VolcanoGUI(tk.Tk):
                                              hint="Specific proteins to mark (green) and always label. "
                                                   "Comma-separated UniProt IDs, e.g. Q13546, P51617.")
 
+        dots = ttk.LabelFrame(parent, text="Dots (size, transparency, colours)")
+        dots.pack(fill="x", padx=4, pady=4)
+        _colors = ["grey", "black", "red", "blue", "green", "orange", "purple", "brown",
+                   "pink", "cyan", "magenta", "teal", "navy", "gold", "darkred", "darkblue", "darkgreen"]
+        v["dot_size"] = labeled_combo(dots, 0, "Dot size", [10, 20, 30, 40, 50, 60, 80, 100], 40,
+                                      hint="Marker size of the main dots (background, up, down).")
+        v["dot_alpha"] = labeled_combo(dots, 1, "Transparency (alpha)",
+                                       ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"], "0.5",
+                                       hint="Opacity of the main dots: 1.0 = solid, lower = more see-through.")
+        v["color_up"] = labeled_combo(dots, 2, "Up-regulated colour", _colors, "red",
+                                      hint="Colour of significant up-regulated dots.")
+        v["color_down"] = labeled_combo(dots, 3, "Down-regulated colour", _colors, "blue",
+                                        hint="Colour of significant down-regulated dots.")
+        v["color_imputed"] = labeled_combo(dots, 4, "Imputed colour", _colors, "orange",
+                                           hint="Colour of the imputed-protein markers.")
+        v["color_highlight"] = labeled_combo(dots, 5, "Highlight colour", _colors, "green",
+                                             hint="Colour of the 'Highlight genes' markers.")
+        v["color_bg"] = labeled_combo(dots, 6, "Background colour", _colors, "grey",
+                                      hint="Colour of the non-significant background dots.")
+
         lab = ttk.LabelFrame(parent, text="Labels")
         lab.pack(fill="x", padx=4, pady=4)
         v["label_topX_mid_fc"] = labeled_entry(lab, 0, "Label top-X mid FC", "", tip="blank = off",
@@ -983,6 +1027,8 @@ class VolcanoGUI(tk.Tk):
                                             "(prevents an unreadable, slow plot).")
         v["file_suffix"] = labeled_entry(lab, 3, "File suffix", "",
                                          hint="Extra text appended to the saved PNG file name.")
+        v["dpi"] = labeled_combo(lab, 4, "DPI", [100, 150, 200, 300, 600, 1200], 300,
+                                 hint="Resolution of the saved PNG (dots per inch). Higher = sharper, bigger file.")
 
         place = ttk.LabelFrame(parent, text="Label selection & placement")
         place.pack(fill="x", padx=4, pady=4)
@@ -1065,6 +1111,8 @@ class VolcanoGUI(tk.Tk):
                                                "Values outside are clipped to the ends.")
         v["legend_num"] = labeled_entry(fig, 9, "Legend # entries", "auto", tip="auto or integer",
                                         hint="Number of size-legend entries (FDR). 'auto' or an integer.")
+        v["dpi"] = labeled_combo(fig, 10, "DPI", [100, 150, 200, 300, 600], 200,
+                                 hint="Resolution of the saved PNG (dots per inch). Higher = sharper, bigger file.")
 
         opt = ttk.LabelFrame(parent, text="Options")
         opt.pack(fill="x", padx=4, pady=4)
@@ -1566,6 +1614,7 @@ class VolcanoGUI(tk.Tk):
                 tick_fontsize=_opt_float(self.pca_vars["tick_fontsize"].get()),
                 legend_fontsize=_opt_float(self.pca_vars["legend_fontsize"].get()),
                 point_label_fontsize=_req_float(self.pca_vars["point_label_fontsize"].get(), 4),
+                dpi=_req_int(self.pca_vars["dpi"].get(), 300),
             )
             self._embed(plt.gcf(), "pca")
             logging.getLogger().info("Plotted PCA")

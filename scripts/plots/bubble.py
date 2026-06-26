@@ -30,7 +30,7 @@ def bubble_dendro_plot(SAR, config, SAR_suffix="", figure_filename="bubble_plot.
                        colorFCrange=[-4,0], highlight_G_loop=0, highlight_RT_loop=0, rainbow_palette=0,
                        invert_xy=False, selected_genes=[], legend_num: Union[str, int] = "auto",
                        title_fontsize=30, axis_fontsize=30, colorbar_label_fontsize=30,
-                       colorbar_tick_fontsize=30, legend_fontsize=30):
+                       colorbar_tick_fontsize=30, legend_fontsize=30, dpi=200):
     # SAR_suffix="_1uM_vs_DMSO"
     # highlight_G_loop can be 0:none, 1: 5res-list, 2: 8res-list
     # invert_xy: if True, swap the x and y axes and do not draw the dendrogram
@@ -301,5 +301,5 @@ def bubble_dendro_plot(SAR, config, SAR_suffix="", figure_filename="bubble_plot.
 
     plt.subplots_adjust(hspace=0.01, wspace=0.01)
     plt.tight_layout()
-    plt.savefig(figure_filename, dpi=200)
+    plt.savefig(figure_filename, dpi=dpi)
     plt.show()

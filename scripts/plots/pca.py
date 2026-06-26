@@ -11,7 +11,7 @@ from adjustText import adjust_text
 
 def generate_pca_plot(df, group_columns, filename="PCA_plot.png", title="PCA of Samples", text=False,
                       title_fontsize=20, axis_fontsize=15, tick_fontsize=None,
-                      legend_fontsize=None, point_label_fontsize=4):
+                      legend_fontsize=None, point_label_fontsize=4, dpi=300):
     """
     Generates and saves a PCA plot for the given data frame and group assignments.
 
@@ -82,5 +82,5 @@ def generate_pca_plot(df, group_columns, filename="PCA_plot.png", title="PCA of 
     plt.tight_layout()
 
     # Save and show the plot
-    plt.savefig(filename, dpi=300)
+    plt.savefig(filename, dpi=dpi)
     plt.show()
