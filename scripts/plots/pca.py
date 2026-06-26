@@ -84,3 +84,7 @@ def generate_pca_plot(df, group_columns, filename="PCA_plot.png", title="PCA of 
     # Save and show the plot
     plt.savefig(filename, dpi=dpi)
     plt.show()
+
+    # Return the per-sample coordinates (index = sample/column names) so callers
+    # (e.g. the GUI) can attach a hover tooltip.
+    return pca_df

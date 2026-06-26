@@ -1755,29 +1755,20 @@ class VolcanoGUI(tk.Tk):
         self._plot_canvas = None   # an image view has no matplotlib canvas
         self._show_tab_area(key)
 
-    def _attach_hover(self, canvas, treated, control):
-        """Show the gene name in a tooltip when hovering a dot on a volcano canvas."""
-        if self.result is None or canvas is None:
+    def _point_hover(self, canvas, xs, ys, labels):
+        """Generic: show labels[i] in a tooltip when hovering near point (xs[i], ys[i])."""
+        if canvas is None:
             return
         try:
             fig = canvas.figure
             if not fig.axes:
                 return
             ax = fig.axes[0]
-            df = self.result.summary
-            xcol = f"log2FC_{treated}_vs_{control}"
-            fcol = (f"bh_FDR_{treated}_vs_{control}" if getattr(self.cfg, "output_adjpval", True)
-                    else f"Pvalue_{treated}_vs_{control}")
-            if xcol not in df.columns or fcol not in df.columns:
+            xs = np.asarray(xs, dtype=float)
+            ys = np.asarray(ys, dtype=float)
+            if xs.size == 0:
                 return
-            sub = df[[xcol, fcol, "Genes"]].copy()
-            sub = sub[sub[xcol].notna() & sub[fcol].notna() & (sub[fcol] > 0)]
-            if sub.empty:
-                return
-            xs = sub[xcol].to_numpy(dtype=float)
-            ys = -np.log10(sub[fcol].to_numpy(dtype=float))
-            genes = [g if str(g).strip() else a
-                     for g, a in zip(sub["Genes"].astype(str), sub.index.astype(str))]
+            labels = [str(l) for l in labels]
             pts = np.column_stack([xs, ys])
             annot = ax.annotate("", xy=(0, 0), xytext=(12, 12), textcoords="offset points",
                                 bbox=dict(boxstyle="round", fc="#ffffe0", ec="0.5", alpha=0.95),
@@ -1792,9 +1783,9 @@ class VolcanoGUI(tk.Tk):
                 disp = ax.transData.transform(pts)
                 d = np.hypot(disp[:, 0] - event.x, disp[:, 1] - event.y)
                 i = int(np.argmin(d))
-                if d[i] <= 12:                       # within ~12 px of a dot
+                if d[i] <= 12:                       # within ~12 px of a point
                     annot.xy = (xs[i], ys[i])
-                    annot.set_text(genes[i])
+                    annot.set_text(labels[i])
                     annot.set_visible(True)
                     canvas.draw_idle()
                 elif annot.get_visible():
@@ -1803,6 +1794,33 @@ class VolcanoGUI(tk.Tk):
             canvas.mpl_connect("motion_notify_event", _on_move)
         except Exception:
             pass
+
+    def _attach_hover(self, canvas, treated, control):
+        """Hover a volcano dot -> show its gene name."""
+        if self.result is None or canvas is None:
+            return
+        df = self.result.summary
+        xcol = f"log2FC_{treated}_vs_{control}"
+        fcol = (f"bh_FDR_{treated}_vs_{control}" if getattr(self.cfg, "output_adjpval", True)
+                else f"Pvalue_{treated}_vs_{control}")
+        if xcol not in df.columns or fcol not in df.columns:
+            return
+        sub = df[[xcol, fcol, "Genes"]].copy()
+        sub = sub[sub[xcol].notna() & sub[fcol].notna() & (sub[fcol] > 0)]
+        if sub.empty:
+            return
+        labels = [g if str(g).strip() else a
+                  for g, a in zip(sub["Genes"].astype(str), sub.index.astype(str))]
+        self._point_hover(canvas, sub[xcol].to_numpy(dtype=float),
+                          -np.log10(sub[fcol].to_numpy(dtype=float)), labels)
+
+    def _attach_hover_pca(self, canvas, pca_df):
+        """Hover a PCA dot -> show its sample name."""
+        if canvas is None or pca_df is None or "PC1" not in getattr(pca_df, "columns", []):
+            return
+        labels = [str(s).split("/")[-1] for s in pca_df.index]
+        self._point_hover(canvas, pca_df["PC1"].to_numpy(dtype=float),
+                          pca_df["PC2"].to_numpy(dtype=float), labels)
 
     def _on_plot_all(self):
         """Generate a volcano for every comparison using the current settings."""
@@ -1885,7 +1903,7 @@ class VolcanoGUI(tk.Tk):
         try:
             self._ensure_outdir_cwd()
             plt.close("all")
-            generate_pca_plot(
+            pca_df = generate_pca_plot(
                 self.result.df_original, self.result.group_columns,
                 filename=str(self.pca_vars["filename"].get()).strip() or "PCA_plot.png",
                 title=str(self.pca_vars["title"].get()),
@@ -1898,6 +1916,7 @@ class VolcanoGUI(tk.Tk):
                 dpi=_req_int(self.pca_vars["dpi"].get(), 300),
             )
             self._embed(plt.gcf(), "pca")
+            self._attach_hover_pca(self._plot_canvas, pca_df)
             logging.getLogger().info("Plotted PCA")
         except Exception:
             self.log_q.put(traceback.format_exc() + "\n")
