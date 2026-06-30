@@ -129,13 +129,19 @@ application folder. They include:
 
 - the volcano / PCA PNGs and the main results Excel
   (**`final_analysis_results_imputed.xlsx`**): a `Fold_Change_Summary` sheet (FC,
-  log2FC, raw `Pvalue_`, adjusted `bh_FDR_`) plus a per-comparison sheet each with
-  the imputed intensities and an **`Imputed`** TRUE/FALSE column,
+  log2FC, raw `Pvalue_`, adjusted `adjPvalue_`) plus a per-comparison sheet each
+  with the imputed intensities and an **`Imputed`** TRUE/FALSE column,
 - **`significant_downreg.xlsx`** and **`significant_upreg.xlsx`** — one row per
   significant entry (log2FC ≤ −1 / ≥ 1, adjusted P ≤ 0.05) with columns
   *comparison, gene, uniprot, log2FC, p, adjusted P, imputed*,
 - **`analysis_log.txt`** — the full run log (everything shown in the Log box,
-  including which proteins were/weren't imputed and why).
+  including which proteins were/weren't imputed and why),
+- **`workspace.json`** — a small snapshot of all settings plus **pointers to the
+  data files** (not copies of the data). It's **auto-saved** here after each run
+  (no Save button). **Load workspace** on the Analysis tab reopens a session: it
+  restores every setting and **rebuilds the plots/lookup from this output folder's
+  saved results** (the results Excel + the precursor file) — no re-run. It only
+  re-runs if the saved outputs are missing.
 
 ## Using your own data
 

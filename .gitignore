@@ -15,6 +15,7 @@ proteomics_GUI_output/
 final_analysis_results*.xlsx
 significant_*reg.xlsx
 temp.csv
+workspace.json
 Normalized_imputed_data_*.tsv
 temp.csv
 *.png

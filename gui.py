@@ -18,6 +18,7 @@ Run it with:  python gui.py
 import os
 import sys
 import glob
+import json
 import queue
 import logging
 import threading
@@ -47,15 +48,19 @@ from scripts.plots.pca import generate_pca_plot
 from scripts.plots.bubble import bubble_dendro_plot
 
 
-def _version_suffix():
-    """Read the VERSION file next to this script; return '  (v1.0.0)' or ''."""
+def _app_version():
+    """The version string from the VERSION file next to this script, or ''."""
     try:
         here = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(here, "VERSION"), encoding="utf-8") as f:
-            v = f.read().strip()
-        return f"  (v{v})" if v else ""
+            return f.read().strip()
     except Exception:
         return ""
+
+
+def _version_suffix():
+    v = _app_version()
+    return f"  (v{v})" if v else ""
 
 
 # --------------------------------------------------------------------------- #
@@ -716,6 +721,7 @@ class VolcanoGUI(tk.Tk):
         self._plot_canvas = None
         self._volcano_nb = None        # the volcano "plot all" notebook (if shown)
         self._current_volcano_comp = None   # last single volcano comparison shown
+        self._pending_workspace = None      # settings to re-apply after a workspace-triggered run
         self.output_dir = None   # dedicated outputs folder under the data folder
         self._log_fh = None      # open file handle: <output_dir>/analysis_log.txt
         self._scrollables = []   # ScrollableFrames, for app-wide mouse-wheel routing
@@ -888,6 +894,16 @@ class VolcanoGUI(tk.Tk):
                               "in the background. Outputs and a log go to proteomics_GUI_output.")
         self.status = ttk.Label(bar, text="Not run yet", foreground="#a60")
         self.status.pack(side="left", padx=8)
+
+        # Workspace recall. A small workspace.json (all settings + pointers to the
+        # data files, not copies) is auto-saved to the output folder after each run,
+        # so there's no Save button -- just reopen one here.
+        self.load_ws_btn = ttk.Button(bar, text="Load workspace", command=self._on_load_workspace)
+        self.load_ws_btn.pack(side="right", padx=4)
+        Tooltip(self.load_ws_btn, "Reopen a saved workspace.json: restores every setting and rebuilds the "
+                                  "plots/lookup from the saved results in the output folder -- no re-run "
+                                  "(it only re-runs if those outputs are missing). "
+                                  "A workspace is auto-saved after each run.")
 
         gframe = ttk.LabelFrame(tab, text="Group assignments (samples matched per group)")
         gframe.pack(side="bottom", fill="both", padx=4, pady=4)
@@ -1589,6 +1605,233 @@ class VolcanoGUI(tk.Tk):
         workdir = os.path.dirname(os.path.abspath(pg_path))
         return os.path.join(workdir, "proteomics_GUI_output")
 
+    # ----- workspace: save / recall all settings -----
+    def _collect_workspace(self):
+        """Snapshot every input setting as a JSON-serializable dict, plus small
+        structural info (group_columns, comparisons) so a recall can rebuild the
+        result from the saved outputs without re-deriving anything."""
+        def vals(d):
+            return {k: var.get() for k, var in d.items()}
+        ws = {
+            "app": "proteomics_GUI",
+            "version": _app_version(),
+            "config": vals(self.cfg_vars),
+            "pca": vals(self.pca_vars),
+            "volcano": vals(self.vol_vars),
+            "bubble": vals(self.bub_vars),
+            "sar_text": self._sar_text.get("1.0", "end").rstrip("\n") if self._sar_text else "",
+            "treat": self.treat_cb.get(),
+            "control": self.ctrl_cb.get(),
+            "lookup_query": self.lookup_query.get(),
+            "lookup_comp": self.lookup_comp.get(),
+        }
+        if self.result is not None:
+            ws["group_columns"] = {k: list(v) for k, v in self.result.group_columns.items()}
+            ws["comparisons"] = list(self.result.imputed_dataframes.keys())
+        return ws
+
+    def _apply_workspace(self, ws):
+        """Restore settings from a workspace dict (only keys we recognise)."""
+        def setv(d, data):
+            for k, value in (data or {}).items():
+                if k in d:
+                    try:
+                        d[k].set(value)
+                    except Exception:
+                        pass
+        setv(self.cfg_vars, ws.get("config"))
+        setv(self.pca_vars, ws.get("pca"))
+        setv(self.vol_vars, ws.get("volcano"))
+        setv(self.bub_vars, ws.get("bubble"))
+        if self._sar_text is not None and "sar_text" in ws:
+            self._sar_text.delete("1.0", "end")
+            self._sar_text.insert("1.0", ws.get("sar_text", ""))
+        for cb, key in ((self.treat_cb, "treat"), (self.ctrl_cb, "control"),
+                        (self.lookup_comp, "lookup_comp")):
+            val = ws.get(key)
+            if val:
+                try:
+                    cb.set(val)
+                except Exception:
+                    pass
+        if "lookup_query" in ws:
+            self.lookup_query.set(ws.get("lookup_query", ""))
+        self._update_path_label()
+
+    def _write_workspace(self, path):
+        """Write the workspace as small JSON: settings + pointers to the data files
+        (no copies of the matrices). Atomic (temp + replace)."""
+        path = os.path.abspath(path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(self._collect_workspace(), f, indent=2)
+        os.replace(tmp, path)
+
+    def _autosave_workspace(self, path):
+        """Auto-save the (small) workspace JSON; logged, best-effort."""
+        try:
+            self._write_workspace(path)
+            logging.getLogger().info("Workspace saved -> %s", path)
+        except Exception:
+            self.log_q.put(traceback.format_exc() + "\n")
+
+    def _workspace_dir(self):
+        """Best guess for where workspaces live: the output folder."""
+        if self.output_dir:
+            return self.output_dir
+        pg = self.cfg_vars["pg_path"].get().strip()
+        if pg:
+            return self._output_dir_for(pg)
+        return os.path.dirname(os.path.abspath(__file__))
+
+    @staticmethod
+    def _results_xlsx_name(config):
+        """The results-Excel filename _save_workflow_excel would have produced."""
+        imp = bool(getattr(config, "imputation_option", True))
+        norm = bool(getattr(config, "normalization_protein_id", ""))
+        if imp and norm:
+            return "final_analysis_results_imputed_normalized.xlsx"
+        if imp:
+            return "final_analysis_results_imputed.xlsx"
+        if norm:
+            return "final_analysis_results_normalized.xlsx"
+        return "final_analysis_results.xlsx"
+
+    def _reconstruct_from_outputs(self, ws):
+        """Rebuild an AnalysisResult from the saved results Excel + the workspace
+        config (no limma re-run). Returns the result, or None if it can't be done
+        (then the caller falls back to re-running)."""
+        import pandas as pd
+        from scripts.pipeline import AnalysisResult
+        try:
+            cfg = build_config(self._cfg_values())
+        except Exception:
+            return None
+        pg = (getattr(cfg, "pg_path", "") or "").strip()
+        pr = (getattr(cfg, "pr_path", "") or "").strip()
+        if not pg:
+            return None
+        xlsx = os.path.join(self._output_dir_for(pg), self._results_xlsx_name(cfg))
+        if not os.path.exists(xlsx):
+            return None
+
+        def _unrename(c):  # adjPvalue_<comp> -> bh_FDR_<comp> (internal name)
+            c = str(c)
+            return ("bh_FDR_" + c[len("adjPvalue_"):]) if c.startswith("adjPvalue_") else c
+
+        def _is_true(v):
+            return v is True or v == 1 or str(v).strip().upper() == "TRUE"
+
+        xls = pd.ExcelFile(xlsx)
+        summary = xls.parse("Fold_Change_Summary").rename(columns=_unrename)
+        if "Protein.Group" in summary.columns:
+            summary = summary.set_index("Protein.Group")
+
+        comparisons = ws.get("comparisons") or [str(c)[len("log2FC_"):]
+                                                for c in summary.columns if str(c).startswith("log2FC_")]
+        group_columns = ws.get("group_columns") or {}
+
+        stat_prefixes = ("FC_", "log2FC_", "Pvalue_", "bh_FDR_", "adjPvalue_", "-log_P_adj_")
+        keep = [c for c in summary.columns if not str(c).startswith(stat_prefixes)]
+        df_original = summary[keep].copy()           # metadata + sample intensities
+
+        # An older workspace may not have stored group_columns (saved before the
+        # analysis finished). Rebuild it from the config's group patterns matched
+        # against the sample-intensity columns so plotting/imputation can work.
+        if not group_columns and getattr(cfg, "group_names", None):
+            from scripts.io import assign_groups
+            group_columns = assign_groups(df_original, cfg.group_names)
+
+        imputed_dataframes, imputation_dict = {}, {}
+        for comp in comparisons:
+            sheet = comp[:31]
+            if sheet not in xls.sheet_names:
+                continue
+            d = xls.parse(sheet).rename(columns=_unrename)
+            if "Protein.Group" in d.columns:
+                d = d.set_index("Protein.Group")
+            imputation_dict[comp] = [i for i, v in d["Imputed"].items() if _is_true(v)] \
+                if "Imputed" in d.columns else []
+            imputed_dataframes[comp] = d
+
+        # Precursor matrix for the lookup (read from the pointed file; empty if absent).
+        try:
+            df_peptide = pd.read_csv(pr, sep="\t", index_col=0) if pr and os.path.exists(pr) else pd.DataFrame()
+        except Exception:
+            df_peptide = pd.DataFrame()
+
+        return AnalysisResult(config=cfg, df_original=df_original, df_peptide=df_peptide,
+                              group_columns=group_columns, imputed_dataframes=imputed_dataframes,
+                              imputation_dict=imputation_dict, summary=summary)
+
+    def _activate_result(self, result, status="Loaded from saved outputs"):
+        """Put a (reconstructed or computed) result into the GUI and show its plots."""
+        self.cfg = result.config
+        self.result = result
+        try:
+            if getattr(result.config, "pg_path", ""):
+                self.output_dir = self._output_dir_for(result.config.pg_path)
+        except Exception:
+            pass
+        self._set_group_text(result.group_columns)
+        groups = list(result.group_columns.keys())
+        self.treat_cb.configure(values=groups)
+        self.ctrl_cb.configure(values=groups)
+        if not self.treat_cb.get():
+            if result.config.comparison_matrix:
+                self.treat_cb.set(result.config.comparison_matrix[0][0])
+                self.ctrl_cb.set(result.config.comparison_matrix[0][1])
+            elif groups:
+                self.treat_cb.set(groups[-1])
+                self.ctrl_cb.set(result.config.reference_group)
+        comps = list(result.imputed_dataframes.keys())
+        self.lookup_comp.configure(values=comps + ["All samples"])
+        if not self.lookup_comp.get():
+            self.lookup_comp.set(comps[0] if comps else "All samples")
+        for b in (self.plot_all_btn, self.plot_btn, self.pca_btn, self.bubble_btn, self.lookup_btn):
+            b.configure(state="normal")
+        self.status.configure(text=status, foreground="#080")
+        self.nb.select(2)                  # Volcano tab
+        self.after(50, self._on_plot_all)
+
+    def _on_load_workspace(self):
+        path = filedialog.askopenfilename(
+            title="Load workspace", initialdir=self._workspace_dir(),
+            filetypes=[("Workspace", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                ws = json.load(f)
+        except Exception:
+            self.log_q.put(traceback.format_exc() + "\n")
+            messagebox.showerror("Workspace", "Could not read the workspace file. See the Log.")
+            return
+        self._apply_workspace(ws)
+        # Prefer rebuilding from the saved results Excel (instant, no R needed).
+        result = None
+        try:
+            result = self._reconstruct_from_outputs(ws)
+        except Exception:
+            self.log_q.put(traceback.format_exc() + "\n")
+            result = None
+        if result is not None:
+            self._activate_result(result)
+            logging.getLogger().info("Workspace reopened from saved outputs: %s", path)
+            return
+        # Fall back: re-run from the data files the workspace points to.
+        pg = self.cfg_vars["pg_path"].get().strip()
+        if pg and os.path.exists(pg):
+            self._pending_workspace = ws
+            logging.getLogger().info("No saved outputs; re-running from %s", pg)
+            self._on_run()
+        else:
+            messagebox.showwarning(
+                "Workspace",
+                "Settings loaded, but there are no saved outputs to reopen and the protein file path "
+                f"doesn't exist:\n{pg or '(none)'}\n\nPick the file on this machine, then click 'Run analysis'.")
+
     def _update_path_label(self):
         pg = self.cfg_vars["pg_path"].get().strip()
         if pg:
@@ -1729,6 +1972,15 @@ class VolcanoGUI(tk.Tk):
             for b in (self.plot_all_btn, self.plot_btn, self.pca_btn, self.bubble_btn, self.lookup_btn):
                 b.configure(state="normal")
             self.status.configure(text="Analysis complete", foreground="#080")
+            # If this run came from loading a workspace, re-apply its settings now
+            # (the wiring above reset a few to run-derived defaults).
+            if getattr(self, "_pending_workspace", None):
+                self._apply_workspace(self._pending_workspace)
+                self._pending_workspace = None
+                self.status.configure(text="Loaded from workspace", foreground="#080")
+            # Auto-save the (small) workspace -- settings + pointers to the data
+            # files -- so the session can be recalled later by re-running from them.
+            self._autosave_workspace(os.path.join(self.output_dir, "workspace.json"))
             # By default, generate volcanoes for ALL comparisons and show that tab.
             self.nb.select(2)  # Volcano tab
             self.after(50, self._on_plot_all)
