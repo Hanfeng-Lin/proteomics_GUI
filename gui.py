@@ -16,6 +16,7 @@ Run it with:  python gui.py
 """
 
 import os
+import re
 import sys
 import glob
 import json
@@ -254,7 +255,11 @@ def build_config(v):
     Inputs are the browsed pg/pr file paths; the working folder is wherever the
     pg file lives. Raises ValueError (with a human message) on bad input.
     """
-    groups = [g.strip() for g in str(v["group_names"]).split(",") if g.strip()]
+    groups = [g.strip() for g in re.split(r"[,\n]", str(v["group_names"])) if g.strip()]
+    # Optional exact-match patterns from the auto-picker; keep only those whose
+    # label is still among the current group names (a manual edit can drop some).
+    gp_raw = v.get("group_patterns") or {}
+    group_patterns = {g: gp_raw[g] for g in groups if g in gp_raw} or None
 
     comp_raw = str(v["comparison_matrix"]).strip()
     if comp_raw == "":
@@ -294,6 +299,7 @@ def build_config(v):
         output_adjpval=bool(v["output_adjpval"]),
         pg_path=pg,
         pr_path=pr,
+        group_patterns=group_patterns,
     )
 
 
@@ -534,15 +540,81 @@ def _decompose(cores, depth=0):
     return _decompose(left, depth + 1) + [("anchor", anchor)] + _decompose(right, depth + 1)
 
 
-def group_candidates(sample_cols):
-    """Propose group-name schemes from sample column headers.
+def _make_part(values):
+    """A decomposition slot: 'const' if every sample shares the value, else 'var'
+    (a variable field the user can pick). ``values`` is aligned per sample."""
+    uniq = _uniq(values)
+    if len(uniq) <= 1:
+        return {"kind": "const", "text": values[0] if values else ""}
+    return {"kind": "var", "values": list(values), "uniq": uniq, "label": ""}
 
-    Returns (prefix, suffix, anchors, candidates):
-      - anchors    : every consensus region shared by all sample names.
-      - candidates : list of (description, [group names]), variable fields in
-        header order first (earlier fields, usually the compound, ranked first),
-        then a delimiter fallback. Handles MULTIPLE consensus regions and group
-        names that contain the delimiter (e.g. 'Positive_Control').
+
+def _split_fields(values, delim):
+    """Split each value on ``delim`` into positional sub-columns. Only fires when
+    EVERY value has at least 2 parts -- this keeps multi-token names like
+    'Positive_Control' whole (DMSO has just 1 part), while still splitting regular
+    'NR-TDxdR_TDXd_1' names. Returns ``min(parts)`` columns; the last column
+    absorbs any extra trailing tokens, so a ragged tail (an optional re-injection
+    timestamp, or controls that drop a field) doesn't break the alignment. Returns
+    None when there's nothing safe to split."""
+    if not delim:
+        return None
+    pieces = [v.split(delim) for v in values]
+    k = min(len(p) for p in pieces)
+    if k < 2:
+        return None
+    cols = []
+    for j in range(k):
+        if j < k - 1:
+            cols.append([p[j] for p in pieces])
+        else:                                   # last kept field swallows the tail
+            cols.append([delim.join(p[j:]) for p in pieces])
+    return cols
+
+
+def _label_fields(parts):
+    """Give each variable field a human description from its neighbouring anchors."""
+    n = 0
+    for i, p in enumerate(parts):
+        if p["kind"] != "var":
+            continue
+        n += 1
+        def _anchor(rng):
+            return next((parts[j]["text"].strip("".join(_DELIMS))
+                         for j in rng if parts[j]["kind"] == "const"
+                         and parts[j]["text"].strip("".join(_DELIMS))), "")
+        nxt = _anchor(range(i + 1, len(parts)))
+        prv = _anchor(range(i - 1, -1, -1))
+        if nxt:
+            p["label"] = f"Field {n} (before '{nxt}')"
+        elif prv:
+            p["label"] = f"Field {n} (after '{prv}')"
+        else:
+            p["label"] = f"Field {n}"
+
+
+def analyze_sample_fields(sample_cols, delim="_", rep_suffix=""):
+    """Decompose aligned sample names into ordered parts so the caller can pick
+    which variable fields define a group.
+
+    Returns ``(prefix, suffix, parts)`` where ``parts`` is an ordered list of:
+      - ``{"kind": "const", "text": str}``   -- a region shared by every sample
+      - ``{"kind": "var", "values": [...per sample...], "uniq": [...], "label": str}``
+    For every sample i, ``column == prefix + concat(const text | values[i]) + REP + suffix``
+    where REP is the (per-sample, possibly empty) replicate suffix matched by
+    ``rep_suffix``.
+
+    Three steps make this versatile:
+      1. trim the shared prefix/suffix;
+      2. if ``rep_suffix`` (a regex) is given, strip the trailing replicate run
+         from each core first -- this collapses ragged tails like an optional
+         re-injection timestamp AND controls that drop a field, so e.g. CDK2's
+         'compound_dose_rep[_timestamp]' and 'DMSO_rep' both reduce to the group
+         body ('22-11_1000nM' / 'DMSO');
+      3. a consensus pass (longest-common-substring) splits on shared regions
+         (keeps 'Positive_Control' whole, isolates a middle plate-well field),
+         then any leftover region where every sample has >= 2 ``delim`` parts is
+         split positionally (resistance / treatment fields).
     """
     cols = list(sample_cols)
     prefix = os.path.commonprefix(cols)
@@ -555,67 +627,99 @@ def group_candidates(sample_cols):
     suffix = suffix[first_delim:] if first_delim is not None else ""
     cores = [c[len(prefix): len(c) - len(suffix)] if suffix else c[len(prefix):] for c in cols]
 
-    tokens = _decompose(cores)
-    anchors = [t[1] for t in tokens if t[0] == "anchor" and t[1].strip()]
+    if rep_suffix:
+        try:
+            rep_re = re.compile(rep_suffix + r"$")
+            cores = [(lambda m, c: c[:m.start()] if m and m.start() else c)(rep_re.search(c), c)
+                     for c in cores]
+        except re.error:
+            pass
 
-    raw = []  # (priority, description, groups)
-    pos = 0
-    for idx, t in enumerate(tokens):
-        if t[0] != "seg":
+    parts = []
+    for kind, payload in _decompose(cores):
+        if kind == "anchor":
+            parts.append({"kind": "const", "text": payload})
             continue
-        vals = _uniq(t[1])
-        if len(vals) <= 1:  # constant or empty segment -> part of the consensus
-            continue
-        nxt = next((tokens[j][1] for j in range(idx + 1, len(tokens)) if tokens[j][0] == "anchor"), "")
-        prv = next((tokens[j][1] for j in range(idx - 1, -1, -1) if tokens[j][0] == "anchor"), "")
-        if nxt:
-            desc = f"Field {pos + 1} (before '{nxt}')"
-        elif prv:
-            desc = f"Field {pos + 1} (after '{prv}')"
+        sub = _split_fields(payload, delim)         # payload is the per-sample list
+        if sub is None:
+            parts.append(_make_part(payload))
         else:
-            desc = f"Field {pos + 1}"
-        raw.append((pos, desc, vals))
-        pos += 1
+            for j, vals in enumerate(sub):
+                if j:
+                    parts.append({"kind": "const", "text": delim})
+                parts.append(_make_part(vals))
+    _label_fields(parts)
+    return prefix, suffix, parts
 
-    # Delimiter fallback (lower priority) for names with no usable consensus.
-    for delim in ("_", "-", "."):
-        if not any(delim in core for core in cores):
+
+def build_field_groups(prefix, suffix, parts, selected, delim="_", rep_suffix=""):
+    """Given the variable-field indices the user selected as the group key, return
+    an ordered list of ``(label, regex)``. The label joins the selected field
+    values; the regex is anchored full-match with unselected fields wildcarded and
+    the replicate suffix made optional, so matching is exact (no substring overlap
+    between e.g. 'NR' and 'NR-TDxdR') while every replicate still matches."""
+    sel = [i for i in selected if parts[i]["kind"] == "var"]
+    var_vals = [p["values"] for p in parts if p["kind"] == "var"]
+    n = len(var_vals[0]) if var_vals else 0
+    sel_set = set(sel)
+    tail = f"(?:{rep_suffix})?" if rep_suffix else ""
+    out, seen = [], set()
+    for s in range(n):
+        key = tuple(parts[i]["values"][s] for i in sel)
+        if key in seen:
             continue
-        first = _uniq([core.split(delim, 1)[0] for core in cores])
-        if 1 < len(first):
-            raw.append((100, f"First part before '{delim}'", first))
-
-    # Dedup by group set, keeping the best (lowest-priority) description.
-    best = {}
-    for pri, desc, g in raw:
-        key = tuple(sorted(g))
-        if key not in best or pri < best[key][0]:
-            best[key] = (pri, desc, g)
-    ranked = sorted(best.values(), key=lambda x: x[0])
-    return prefix, suffix, anchors, [(desc, g) for _, desc, g in ranked]
+        seen.add(key)
+        label = delim.join(key) if key else "all"
+        pat = ["^", re.escape(prefix)]
+        for i, p in enumerate(parts):
+            if p["kind"] == "const":
+                pat.append(re.escape(p["text"]))
+            elif i in sel_set:
+                pat.append(re.escape(p["values"][s]))
+            else:
+                pat.append(".*?")
+        pat.append(tail + re.escape(suffix) + "$")
+        out.append((label, "".join(pat)))
+    return out
 
 
 class GroupPickerDialog(tk.Toplevel):
-    """Popup showing the header consensus and candidate group fields to choose."""
+    """Popup to pick which sample-name field(s) define the groups. Multi-select:
+    every checked field becomes part of the group key, everything else is treated
+    as a replicate. Emits clean labels plus exact, anchored match patterns."""
     def __init__(self, parent, sample_cols, apply_cb):
         super().__init__(parent)
         self.title("Auto-pick group names")
-        self.geometry("680x500")
-        self.minsize(560, 360)
+        self.geometry("720x540")
+        self.minsize(620, 420)
         self.apply_cb = apply_cb
+        self.sample_cols = list(sample_cols)
         self.transient(parent)
+        self.delim = tk.StringVar(value="_")
+        # Trailing replicate run to strip before grouping (regex). The default
+        # eats one or more '_<digits>' groups, which folds replicate numbers AND
+        # an optional re-injection timestamp into the replicate dimension, so the
+        # remaining body (e.g. '22-11_1000nM', 'DMSO') becomes the group. Clear it
+        # to keep every field.
+        self.rep = tk.StringVar(value=r"(_\d+)+")
 
-        prefix, suffix, anchors, self.cands = group_candidates(sample_cols)
-        anchors_str = "   |   ".join(f"'{a}'" for a in anchors) if anchors else "(none)"
-        info = (f"{len(sample_cols)} sample columns detected.\n"
-                f"Common prefix:  '{prefix}'\n"
-                f"Common suffix:  '{suffix}'\n"
-                f"Consensus regions:  {anchors_str}")
-        ttk.Label(self, text=info, justify="left", foreground="#444").pack(anchor="w", padx=10, pady=8)
-        ttk.Label(self, text="Choose which field defines your groups:").pack(anchor="w", padx=10)
+        top = ttk.Frame(self)
+        top.pack(side="top", fill="x", padx=10, pady=(8, 2))
+        self.info = ttk.Label(top, justify="left", foreground="#444")
+        self.info.pack(anchor="w")
+        drow = ttk.Frame(self)
+        drow.pack(side="top", fill="x", padx=10, pady=2)
+        ttk.Label(drow, text="Field delimiter:").pack(side="left")
+        ent = ttk.Entry(drow, textvariable=self.delim, width=4)
+        ent.pack(side="left", padx=(4, 8))
+        ttk.Label(drow, text="Replicate suffix to ignore (regex):").pack(side="left")
+        rent = ttk.Entry(drow, textvariable=self.rep, width=12)
+        rent.pack(side="left", padx=(4, 0))
+        self.delim.trace_add("write", lambda *_: self._rebuild())
+        self.rep.trace_add("write", lambda *_: self._rebuild())
+        ttk.Label(self, text="Tick every field that defines a group (others = replicates):",
+                  foreground="#444").pack(side="top", anchor="w", padx=10)
 
-        # Reserve the button bar at the bottom FIRST so it is always visible,
-        # then let the body fill the space above it.
         btns = ttk.Frame(self)
         btns.pack(side="bottom", fill="x", padx=10, pady=8)
         ttk.Button(btns, text="Use selected", command=self._use).pack(side="right", padx=4)
@@ -623,28 +727,82 @@ class GroupPickerDialog(tk.Toplevel):
 
         body = ttk.Frame(self)
         body.pack(side="top", fill="both", expand=True, padx=10, pady=6)
-        left = ttk.Frame(body)
-        left.pack(side="left", fill="both", expand=True)
-        self.lb = tk.Listbox(left, height=10, exportselection=False)
-        for desc, g in self.cands:
-            self.lb.insert("end", f"{desc}   ->   {len(g)} groups")
-        self.lb.pack(side="left", fill="both", expand=True)
-        lsb = ttk.Scrollbar(left, command=self.lb.yview)
-        lsb.pack(side="left", fill="y")
-        self.lb.configure(yscrollcommand=lsb.set)
-        self.lb.bind("<<ListboxSelect>>", self._on_select)
-
+        self.fields_box = ttk.LabelFrame(body, text="Fields")
+        self.fields_box.pack(side="left", fill="both", expand=True)
         prev = ttk.LabelFrame(body, text="Resulting groups")
         prev.pack(side="left", fill="both", expand=True, padx=(8, 0))
-        self.preview = tk.Text(prev, width=28, wrap="word", state="disabled")
+        self.preview = tk.Text(prev, width=30, wrap="word", state="disabled")
         self.preview.pack(fill="both", expand=True)
 
-        if self.cands:
-            self.lb.selection_set(0)
-            self._on_select()
-        else:
-            self._set_preview("No varying fields found in the sample names.")
+        self._rebuild()
         self.grab_set()
+
+    def _rep_suffix(self):
+        """The replicate-suffix regex, or '' if blank/invalid."""
+        rs = self.rep.get().strip()
+        if not rs:
+            return ""
+        try:
+            re.compile(rs)
+            return rs
+        except re.error:
+            return ""
+
+    def _rebuild(self):
+        """Recompute the field decomposition for the current delimiter / replicate
+        suffix and rebuild the checkbox list. The first variable field is pre-checked."""
+        for w in self.fields_box.winfo_children():
+            w.destroy()
+        try:
+            self.prefix, self.suffix, self.parts = analyze_sample_fields(
+                self.sample_cols, self.delim.get(), self._rep_suffix())
+        except Exception:
+            self.parts = []
+            self._set_preview("Could not analyze sample names.")
+            return
+        _delims = "".join(_DELIMS)
+        anchors = [p["text"].strip(_delims) for p in self.parts
+                   if p["kind"] == "const" and p["text"].strip(_delims)]
+        self.info.configure(text=(
+            f"{len(self.sample_cols)} sample columns.   "
+            f"prefix '{self.prefix}'   suffix '{self.suffix}'\n"
+            f"Consensus regions: " + ("  |  ".join(f"'{a}'" for a in anchors) if anchors else "(none)")))
+
+        self.var_indices, self.vars = [], []
+        first = True
+        for i, p in enumerate(self.parts):
+            if p["kind"] != "var":
+                continue
+            v = tk.IntVar(value=1 if first else 0)
+            first = False
+            self.var_indices.append(i)
+            self.vars.append(v)
+            sample = ", ".join(p["uniq"][:6]) + (" ..." if len(p["uniq"]) > 6 else "")
+            cb = ttk.Checkbutton(self.fields_box, variable=v,
+                                 text=f"{p['label']}  ({len(p['uniq'])} values: {sample})",
+                                 command=self._refresh)
+            cb.pack(anchor="w", padx=6, pady=2)
+        if not self.vars:
+            ttk.Label(self.fields_box, text="No varying fields found.").pack(anchor="w", padx=6, pady=6)
+        self._refresh()
+
+    def _selected_indices(self):
+        return [idx for idx, v in zip(self.var_indices, self.vars) if v.get()]
+
+    def _groups(self):
+        if not getattr(self, "parts", None) or not self._selected_indices():
+            return []
+        return build_field_groups(self.prefix, self.suffix, self.parts,
+                                  self._selected_indices(), self.delim.get(), self._rep_suffix())
+
+    def _refresh(self, *_):
+        groups = self._groups()
+        counts = {}
+        for label, pat in groups:
+            counts[label] = sum(1 for c in self.sample_cols if re.search(pat, c))
+        lines = [f"{lab}  ({counts.get(lab, 0)})" for lab, _ in groups]
+        self._set_preview(f"{len(groups)} groups:\n\n" + "\n".join(lines) if groups
+                          else "Tick at least one field.")
 
     def _set_preview(self, text):
         self.preview.configure(state="normal")
@@ -652,19 +810,15 @@ class GroupPickerDialog(tk.Toplevel):
         self.preview.insert("end", text)
         self.preview.configure(state="disabled")
 
-    def _current(self):
-        sel = self.lb.curselection()
-        return self.cands[sel[0]] if sel else None
-
-    def _on_select(self, event=None):
-        c = self._current()
-        self._set_preview("\n".join(c[1]) if c else "")
-
     def _use(self):
-        c = self._current()
-        if c:
-            self.apply_cb(", ".join(c[1]))
-            self.destroy()
+        groups = self._groups()
+        if not groups:
+            messagebox.showinfo("Auto-pick groups", "Tick at least one field first.")
+            return
+        names = ", ".join(lab for lab, _ in groups)
+        patterns = {lab: pat for lab, pat in groups}
+        self.apply_cb(names, patterns)
+        self.destroy()
 
 
 class ScrollableFrame(ttk.Frame):
@@ -714,6 +868,7 @@ class VolcanoGUI(tk.Tk):
         self.result = None      # AnalysisResult after a run
         self.cfg = None
         self.cfg_vars = {}
+        self._group_patterns = {}   # {group label: exact regex} from the auto-picker
         self.pca_vars = {}
         self.vol_vars = {}
         self.bub_vars = {}
@@ -928,18 +1083,68 @@ class VolcanoGUI(tk.Tk):
                                      "check that decides imputation of high-missing proteins.")
         self.path_label = ttk.Label(grid, text="No data selected.", foreground="#555", wraplength=440, justify="left")
         self.path_label.grid(row=2, column=0, columnspan=3, sticky="w", padx=4, pady=(0, 6))
-        lbl_groups = ttk.Label(grid, text="Groups (comma)")
-        lbl_groups.grid(row=3, column=0, sticky="w", padx=4, pady=2)
+        lbl_groups = ttk.Label(grid, text="Groups (comma\nor one per line)")
+        lbl_groups.grid(row=3, column=0, sticky="nw", padx=4, pady=2)
         v["group_names"] = tk.StringVar(value="DMSO, Positive_Control, IRAK1")
-        ent_groups = ttk.Entry(grid, textvariable=v["group_names"], width=34)
-        ent_groups.grid(row=3, column=1, sticky="w", padx=4, pady=2)
+        # Multi-row, scrolling, drag-to-resize box (group lists can be long, e.g. a
+        # 30-compound screen). It stays in sync with the group_names StringVar that
+        # the rest of the app reads/writes, so nothing else has to change.
+        gbox = ttk.Frame(grid)
+        gbox.grid(row=3, column=1, sticky="we", padx=4, pady=2)
+        gbox.columnconfigure(0, weight=1)
+        self.groups_text = tk.Text(gbox, height=3, width=34, wrap="word", undo=True)
+        gvsb = ttk.Scrollbar(gbox, orient="vertical", command=self.groups_text.yview)
+        self.groups_text.configure(yscrollcommand=gvsb.set)
+        self.groups_text.grid(row=0, column=0, sticky="we")
+        gvsb.grid(row=0, column=1, sticky="ns")
+        self.groups_text.insert("1.0", v["group_names"].get())
+        grip = ttk.Separator(gbox, orient="horizontal")
+        grip.grid(row=1, column=0, columnspan=2, sticky="we", pady=(2, 0))
+        grip.configure(cursor="sb_v_double_arrow")
+
+        def _grip_start(e):
+            self._grip_y0 = e.y_root
+            self._grip_h0 = int(float(self.groups_text.cget("height")))
+
+        def _grip_drag(e):
+            self.groups_text.configure(height=max(1, self._grip_h0 + (e.y_root - self._grip_y0) // 16))
+        grip.bind("<Button-1>", _grip_start)
+        grip.bind("<B1-Motion>", _grip_drag)
+
+        # Two-way sync. Typing also drops any exact patterns the auto-picker set
+        # (the picker writes via .set(), which fires the trace but not KeyRelease,
+        # so its patterns survive a programmatic update).
+        self._syncing_groups = False
+
+        def _groups_text_to_var(*_):
+            if self._syncing_groups:
+                return
+            self._syncing_groups = True
+            v["group_names"].set(self.groups_text.get("1.0", "end").strip())
+            self._group_patterns = {}
+            self._syncing_groups = False
+
+        def _groups_var_to_text(*_):
+            if self._syncing_groups:
+                return
+            new = v["group_names"].get()
+            if self.groups_text.get("1.0", "end").strip() != new:
+                self._syncing_groups = True
+                self.groups_text.delete("1.0", "end")
+                self.groups_text.insert("1.0", new)
+                self._syncing_groups = False
+        self.groups_text.bind("<KeyRelease>", _groups_text_to_var)
+        v["group_names"].trace_add("write", _groups_var_to_text)
+
         btn_auto = ttk.Button(grid, text="Auto-pick...", command=self._autopick_groups)
-        btn_auto.grid(row=3, column=2, sticky="w", padx=4)
-        _gh = ("Comma-separated group names. Each is matched as a regex against the sample-column "
-               "headers, so it just needs to be a unique substring (e.g. DMSO, IRAK1).")
+        btn_auto.grid(row=3, column=2, sticky="nw", padx=4)
+        _gh = ("Group names, separated by commas or newlines. Each is matched as a regex against the "
+               "sample-column headers (or exactly, if set via Auto-pick). Drag the bar below the box to "
+               "resize it; it scrolls when the list is long.")
         Tooltip(lbl_groups, _gh)
-        Tooltip(ent_groups, _gh)
-        Tooltip(btn_auto, "Detect candidate group names from the sample-column headers and pick one.")
+        Tooltip(btn_auto, "Split the sample-column headers into fields and tick which field(s) define a "
+                          "group (the rest are treated as replicates). Groups get clean labels but are "
+                          "matched exactly, so 'NR' won't leak into 'NR-TDxdR' columns.")
         v["reference_group"] = labeled_entry(grid, 4, "Reference group", "DMSO", width=18,
                                              hint="The control group every treatment is compared against "
                                                   "(e.g. DMSO). Must be one of the group names above.")
@@ -1006,7 +1211,10 @@ class VolcanoGUI(tk.Tk):
         if len(samples) < 2:
             messagebox.showinfo("Auto-pick groups", "Not enough sample columns to analyze.")
             return
-        GroupPickerDialog(self, samples, lambda s: self.cfg_vars["group_names"].set(s))
+        def _apply(names, patterns):
+            self.cfg_vars["group_names"].set(names)
+            self._group_patterns = patterns
+        GroupPickerDialog(self, samples, _apply)
 
     def _preview_groups(self):
         """Compute group assignments from the pg file's columns, without running."""
@@ -1014,7 +1222,7 @@ class VolcanoGUI(tk.Tk):
         if not pg or not os.path.exists(pg):
             messagebox.showerror("Preview groups", "Select a valid pg_matrix.tsv file first.")
             return
-        groups = [g.strip() for g in self.cfg_vars["group_names"].get().split(",") if g.strip()]
+        groups = [g.strip() for g in re.split(r"[,\n]", self.cfg_vars["group_names"].get()) if g.strip()]
         if not groups:
             messagebox.showerror("Preview groups", "Enter at least one group name.")
             return
@@ -1022,7 +1230,8 @@ class VolcanoGUI(tk.Tk):
             import pandas as pd
             from scripts.io import assign_groups
             df0 = pd.read_csv(pg, sep="\t", index_col=0, nrows=0)  # header only
-            self._set_group_text(assign_groups(df0, groups))
+            patterns = {g: self._group_patterns[g] for g in groups if g in self._group_patterns} or None
+            self._set_group_text(assign_groups(df0, groups, patterns))
             logging.getLogger().info("Previewed group assignments from %s", os.path.basename(pg))
         except Exception:
             self.log_q.put(traceback.format_exc() + "\n")
@@ -1616,6 +1825,7 @@ class VolcanoGUI(tk.Tk):
             "app": "proteomics_GUI",
             "version": _app_version(),
             "config": vals(self.cfg_vars),
+            "group_patterns": self._group_patterns or {},
             "pca": vals(self.pca_vars),
             "volcano": vals(self.vol_vars),
             "bubble": vals(self.bub_vars),
@@ -1640,6 +1850,7 @@ class VolcanoGUI(tk.Tk):
                     except Exception:
                         pass
         setv(self.cfg_vars, ws.get("config"))
+        self._group_patterns = dict(ws.get("group_patterns") or {})
         setv(self.pca_vars, ws.get("pca"))
         setv(self.vol_vars, ws.get("volcano"))
         setv(self.bub_vars, ws.get("bubble"))
@@ -1741,7 +1952,8 @@ class VolcanoGUI(tk.Tk):
         # against the sample-intensity columns so plotting/imputation can work.
         if not group_columns and getattr(cfg, "group_names", None):
             from scripts.io import assign_groups
-            group_columns = assign_groups(df_original, cfg.group_names)
+            group_columns = assign_groups(df_original, cfg.group_names,
+                                          getattr(cfg, "group_patterns", None))
 
         imputed_dataframes, imputation_dict = {}, {}
         for comp in comparisons:
@@ -1863,7 +2075,9 @@ class VolcanoGUI(tk.Tk):
 
     # ----- collecting values -----
     def _cfg_values(self):
-        return {k: var.get() for k, var in self.cfg_vars.items()}
+        v = {k: var.get() for k, var in self.cfg_vars.items()}
+        v["group_patterns"] = self._group_patterns or None
+        return v
 
     def _vol_values(self):
         return {k: var.get() for k, var in self.vol_vars.items()}

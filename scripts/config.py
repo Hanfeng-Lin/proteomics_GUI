@@ -22,7 +22,7 @@ so there is no longer a ``limma_option`` field.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 
 @dataclass
@@ -55,3 +55,10 @@ class AnalysisConfig:
     # folder regardless of the stem. Leave None to use `<file>.pg_matrix.tsv` etc.
     pg_path: Optional[str] = None
     pr_path: Optional[str] = None
+    # Optional {group_name: regex} overrides for matching sample columns. When a
+    # group is present here, ``assign_groups`` matches columns with this (usually
+    # anchored, exact) regex instead of treating the group *name* as the pattern.
+    # Lets the auto-picker keep clean labels (e.g. "NR_TDXd") while matching
+    # exactly, so e.g. "NR" no longer leaks into "NR-TDxdR" columns. None => the
+    # legacy behaviour (each group name is itself the regex).
+    group_patterns: Optional[Dict[str, str]] = None

@@ -276,7 +276,7 @@ def run_core(config: Optional[AnalysisConfig] = None, contaminants=None, save_ou
         from .reference_data import contaminants as contaminants
 
     df, df_peptide = load_dataset(config, contaminants)
-    group_columns = assign_groups(df, config.group_names)
+    group_columns = assign_groups(df, config.group_names, getattr(config, "group_patterns", None))
     df = control_group_cleanup(df, config, group_columns)
 
     # Defer the Excel export until after limma so the per-comparison sheets can

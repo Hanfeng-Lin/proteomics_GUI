@@ -36,16 +36,24 @@ def load_dataset(config, contaminants):
     return df, df_peptide
 
 
-def assign_groups(df, group_names):
-    """Map each group name (regex) to the matching sample columns.
+def assign_groups(df, group_names, group_patterns=None):
+    """Map each group name to the matching sample columns.
 
-    Equivalent to notebook cell 3. Returns the ``group_columns`` dict.
+    By default each group *name* is itself the regex (notebook cell 3 behaviour).
+    If ``group_patterns`` is given, a group listed there is matched with its
+    (usually anchored, exact) regex while the clean name stays the dict key -- so
+    e.g. label ``NR`` can match only ``..._NR_...`` and not ``..._NR-TDxdR_...``.
+    Returns the ``group_columns`` dict.
     """
+    group_patterns = group_patterns or {}
     group_columns = {}
     for group in group_names:
-        pattern = re.compile(group)
+        pattern = group_patterns.get(group, group)
         group_columns[group] = [x for x in df.columns if re.search(pattern, x)]
-    group_columns = {re.sub(r'\\.|\|\^|\$', '', k): v for k, v in group_columns.items()}
+    # Only strip regex punctuation from the keys when the names themselves are the
+    # patterns; explicit group_patterns means the names are already clean labels.
+    if not group_patterns:
+        group_columns = {re.sub(r'\\.|\|\^|\$', '', k): v for k, v in group_columns.items()}
 
     for key in group_columns:
         logger.info("%s: %d", key, len(group_columns[key]))
