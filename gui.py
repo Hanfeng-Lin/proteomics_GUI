@@ -300,6 +300,7 @@ def build_config(v):
         pg_path=pg,
         pr_path=pr,
         group_patterns=group_patterns,
+        drop_samples=[s for s in (v.get("drop_samples") or []) if str(s).strip()],
     )
 
 
@@ -869,6 +870,7 @@ class VolcanoGUI(tk.Tk):
         self.cfg = None
         self.cfg_vars = {}
         self._group_patterns = {}   # {group label: exact regex} from the auto-picker
+        self._drop_samples = []     # sample columns the user excluded from the analysis
         self.pca_vars = {}
         self.vol_vars = {}
         self.bub_vars = {}
@@ -1024,7 +1026,16 @@ class VolcanoGUI(tk.Tk):
         return sf.inner
 
     def _global_wheel(self, event):
-        """Scroll whichever ScrollableFrame the pointer is currently over."""
+        """Scroll whichever ScrollableFrame the pointer is currently over -- unless
+        a Listbox is under the pointer (an open combobox dropdown, or the drop-list),
+        which keeps the wheel for itself instead of leaking it to the panel behind."""
+        try:
+            path = self.tk.call("winfo", "containing", event.x_root, event.y_root)
+            if path and self.tk.call("winfo", "class", path) == "Listbox":
+                self.tk.call(path, "yview", "scroll", int(-event.delta / 120), "units")
+                return "break"
+        except tk.TclError:
+            pass
         for sf in self._scrollables:
             c = sf.canvas
             if not c.winfo_ismapped():
@@ -1165,6 +1176,35 @@ class VolcanoGUI(tk.Tk):
                                                       hint="UniProt ID to normalize every sample to (e.g. a loading "
                                                            "control / spike-in). Blank = no normalization.")
 
+        # Drop samples: pick a sample column from the (live) header dropdown and Add
+        # it to the exclusion list. Dropped columns are removed from both matrices
+        # right after load, so grouping/PCA/imputation never see them.
+        dropf = ttk.LabelFrame(inner, text="Drop samples from analysis (optional)")
+        dropf.pack(fill="x", padx=4, pady=4)
+        drow = ttk.Frame(dropf)
+        drow.pack(fill="x", padx=4, pady=(4, 2))
+        ttk.Label(drow, text="Sample:").pack(side="left")
+        self.drop_combo = ttk.Combobox(drow, state="readonly", width=46, values=[],
+                                       postcommand=self._refresh_sample_list)
+        self.drop_combo.pack(side="left", padx=4)
+        add_btn = ttk.Button(drow, text="Add", width=6, command=self._drop_add)
+        add_btn.pack(side="left", padx=2)
+        Tooltip(self.drop_combo, "Sample columns read live from the selected pg_matrix header. "
+                                 "Pick one and click Add to exclude it from the analysis.")
+        lrow = ttk.Frame(dropf)
+        lrow.pack(fill="both", expand=True, padx=4, pady=(0, 2))
+        self.drop_list = tk.Listbox(lrow, height=3, selectmode="extended", exportselection=False)
+        dsb = ttk.Scrollbar(lrow, command=self.drop_list.yview)
+        self.drop_list.configure(yscrollcommand=dsb.set)
+        self.drop_list.pack(side="left", fill="both", expand=True)
+        dsb.pack(side="left", fill="y")
+        brow = ttk.Frame(dropf)
+        brow.pack(fill="x", padx=4, pady=(0, 4))
+        ttk.Button(brow, text="Remove selected", command=self._drop_remove).pack(side="left", padx=2)
+        ttk.Button(brow, text="Clear all", command=self._drop_clear).pack(side="left", padx=2)
+        self._drop_hint = ttk.Label(brow, text="0 dropped", foreground="#666")
+        self._drop_hint.pack(side="left", padx=8)
+
         checks = ttk.Frame(inner)
         checks.pack(fill="x", padx=4, pady=6)
         v["imputation_option"] = check(checks, 0, "Imputation", True,
@@ -1193,21 +1233,67 @@ class VolcanoGUI(tk.Tk):
                     self._group_text.insert("end", f"    {c}\n")
         self._group_text.configure(state="disabled")
 
+    _META_COLS = {"Protein.Group", "Protein.Ids", "Protein.Names", "Genes", "First.Protein.Description"}
+
+    def _sample_columns(self):
+        """Non-meta sample columns from the current pg file header ([] on failure)."""
+        pg = self.cfg_vars["pg_path"].get().strip()
+        if not pg or not os.path.exists(pg):
+            return []
+        try:
+            import pandas as pd
+            cols = list(pd.read_csv(pg, sep="\t", index_col=0, nrows=0).columns)
+        except Exception:
+            self.log_q.put(traceback.format_exc() + "\n")
+            return []
+        return [c for c in cols if c not in self._META_COLS]
+
+    # ----- drop samples from the analysis -----
+    def _refresh_sample_list(self):
+        """Repopulate the drop-sample dropdown from the pg header, minus what's
+        already dropped. Runs as the combobox's postcommand (on each open)."""
+        avail = [c for c in self._sample_columns() if c not in self._drop_samples]
+        self.drop_combo.configure(values=avail)
+
+    def _update_drop_hint(self):
+        self._drop_hint.configure(text=f"{len(self._drop_samples)} dropped")
+
+    def _drop_add(self):
+        s = self.drop_combo.get().strip()
+        if s and s not in self._drop_samples:
+            self._drop_samples.append(s)
+            self.drop_list.insert("end", s)
+            self.drop_combo.set("")
+            self._update_drop_hint()
+
+    def _drop_remove(self):
+        for i in reversed(self.drop_list.curselection()):
+            s = self.drop_list.get(i)
+            self.drop_list.delete(i)
+            if s in self._drop_samples:
+                self._drop_samples.remove(s)
+        self._update_drop_hint()
+
+    def _drop_clear(self):
+        self._drop_samples = []
+        self.drop_list.delete(0, "end")
+        self._update_drop_hint()
+
+    def _set_drop_samples(self, samples):
+        """Replace the dropped-samples list (used by workspace load)."""
+        self._drop_samples = [str(s) for s in (samples or [])]
+        self.drop_list.delete(0, "end")
+        for s in self._drop_samples:
+            self.drop_list.insert("end", s)
+        self._update_drop_hint()
+
     def _autopick_groups(self):
         """Open a popup to pick group names from the pg matrix header columns."""
         pg = self.cfg_vars["pg_path"].get().strip()
         if not pg or not os.path.exists(pg):
             messagebox.showerror("Auto-pick groups", "Select a valid pg_matrix.tsv file first.")
             return
-        try:
-            import pandas as pd
-            cols = list(pd.read_csv(pg, sep="\t", index_col=0, nrows=0).columns)
-        except Exception:
-            self.log_q.put(traceback.format_exc() + "\n")
-            messagebox.showerror("Auto-pick groups", "Could not read the file header. See the Log.")
-            return
-        meta = {"Protein.Group", "Protein.Ids", "Protein.Names", "Genes", "First.Protein.Description"}
-        samples = [c for c in cols if c not in meta]
+        samples = self._sample_columns()
         if len(samples) < 2:
             messagebox.showinfo("Auto-pick groups", "Not enough sample columns to analyze.")
             return
@@ -1230,6 +1316,8 @@ class VolcanoGUI(tk.Tk):
             import pandas as pd
             from scripts.io import assign_groups
             df0 = pd.read_csv(pg, sep="\t", index_col=0, nrows=0)  # header only
+            if self._drop_samples:                                # mirror the analysis-time drop
+                df0 = df0.drop(columns=[c for c in self._drop_samples if c in df0.columns])
             patterns = {g: self._group_patterns[g] for g in groups if g in self._group_patterns} or None
             self._set_group_text(assign_groups(df0, groups, patterns))
             logging.getLogger().info("Previewed group assignments from %s", os.path.basename(pg))
@@ -1244,6 +1332,8 @@ class VolcanoGUI(tk.Tk):
         self.pca_btn = ttk.Button(bar, text="Plot PCA", command=self._on_plot_pca, state="disabled")
         self.pca_btn.pack(side="left", padx=4)
         Tooltip(self.pca_btn, "Render the PCA plot with the options below (enabled after a run).")
+        ttk.Label(bar, text="  (hover a dot for its sample; click a dot to toggle it in the "
+                            "drop-off list in step 1)", foreground="#888").pack(side="left", padx=4)
 
         inner = self._scroll_inner(tab)
         box = ttk.LabelFrame(inner, text="PCA options")
@@ -1826,6 +1916,7 @@ class VolcanoGUI(tk.Tk):
             "version": _app_version(),
             "config": vals(self.cfg_vars),
             "group_patterns": self._group_patterns or {},
+            "drop_samples": list(self._drop_samples),
             "pca": vals(self.pca_vars),
             "volcano": vals(self.vol_vars),
             "bubble": vals(self.bub_vars),
@@ -1851,6 +1942,7 @@ class VolcanoGUI(tk.Tk):
                         pass
         setv(self.cfg_vars, ws.get("config"))
         self._group_patterns = dict(ws.get("group_patterns") or {})
+        self._set_drop_samples(ws.get("drop_samples"))
         setv(self.pca_vars, ws.get("pca"))
         setv(self.vol_vars, ws.get("volcano"))
         setv(self.bub_vars, ws.get("bubble"))
@@ -2077,6 +2169,7 @@ class VolcanoGUI(tk.Tk):
     def _cfg_values(self):
         v = {k: var.get() for k, var in self.cfg_vars.items()}
         v["group_patterns"] = self._group_patterns or None
+        v["drop_samples"] = list(self._drop_samples)
         return v
 
     def _vol_values(self):
@@ -2360,12 +2453,32 @@ class VolcanoGUI(tk.Tk):
         self._on_lookup()
 
     def _attach_hover_pca(self, canvas, pca_df):
-        """Hover a PCA dot -> show its sample name."""
+        """Hover a PCA dot -> show its sample name; click -> toggle it in step 1's
+        drop-off list (takes effect on the next run)."""
         if canvas is None or pca_df is None or "PC1" not in getattr(pca_df, "columns", []):
             return
-        labels = [str(s).split("/")[-1] for s in pca_df.index]
+        samples = [str(s) for s in pca_df.index]          # full column names (match the drop list)
+        labels = [s.split("/")[-1] for s in samples]      # short names for the tooltip
         self._point_hover(canvas, pca_df["PC1"].to_numpy(dtype=float),
-                          pca_df["PC2"].to_numpy(dtype=float), labels)
+                          pca_df["PC2"].to_numpy(dtype=float), labels,
+                          on_pick=lambda i: self._drop_toggle_from_pca(samples[i]))
+
+    def _drop_toggle_from_pca(self, sample):
+        """Click a PCA dot: add its sample to the drop-off list, or remove it if
+        already there. Logged; excluded from the analysis on the next run."""
+        sample = str(sample)
+        if sample in self._drop_samples:
+            idx = self._drop_samples.index(sample)
+            self._drop_samples.pop(idx)
+            self.drop_list.delete(idx)
+            self._update_drop_hint()
+            logging.getLogger().info("Removed '%s' from the drop-off list.", sample)
+        else:
+            self._drop_samples.append(sample)
+            self.drop_list.insert("end", sample)
+            self._update_drop_hint()
+            logging.getLogger().info("Added '%s' to the drop-off list; it will be "
+                                     "excluded on the next run.", sample)
 
     def _on_plot_all(self):
         """Generate a volcano for every comparison using the current settings."""

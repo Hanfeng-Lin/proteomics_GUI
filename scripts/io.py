@@ -33,6 +33,19 @@ def load_dataset(config, contaminants):
     df_peptide = df_peptide[~df_peptide.index.isin(contaminants)]
     logger.info("peptide after decontamination: %s", df_peptide.shape)
 
+    # Drop any user-excluded sample columns from both matrices before anything
+    # downstream (grouping, PCA, imputation) sees them.
+    drop = [c for c in (getattr(config, "drop_samples", None) or []) if c]
+    if drop:
+        present = [c for c in drop if c in df.columns]
+        df = df.drop(columns=present)
+        df_peptide = df_peptide.drop(columns=[c for c in drop if c in df_peptide.columns])
+        logger.info("Dropped %d/%d requested sample column(s) from analysis: %s",
+                    len(present), len(drop), present)
+        missing = [c for c in drop if c not in present]
+        if missing:
+            logger.info("Drop-sample not found in the protein matrix (ignored): %s", missing)
+
     return df, df_peptide
 
 

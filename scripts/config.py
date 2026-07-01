@@ -55,6 +55,9 @@ class AnalysisConfig:
     # folder regardless of the stem. Leave None to use `<file>.pg_matrix.tsv` etc.
     pg_path: Optional[str] = None
     pr_path: Optional[str] = None
+    # Sample columns to exclude from the whole analysis (dropped right after load,
+    # before grouping/PCA/imputation). Names must match the matrix column headers.
+    drop_samples: List[str] = field(default_factory=list)
     # Optional {group_name: regex} overrides for matching sample columns. When a
     # group is present here, ``assign_groups`` matches columns with this (usually
     # anchored, exact) regex instead of treating the group *name* as the pattern.
