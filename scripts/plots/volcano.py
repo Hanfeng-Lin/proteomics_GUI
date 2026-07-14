@@ -218,10 +218,10 @@ def volcano_plot(treatment_group, control_group, *, df, group_columns, imputatio
         Tchem_highlight = df.loc[Tchem_filtered]
         Tbio_highlight = df.loc[Tbio_filtered]
         Tdark_highlight = df.loc[Tdark_filtered]
-        plt.scatter(x=Tclin_highlight[logFC], y=Tclin_highlight[FDR].apply(lambda x:-np.log10(x)), s=30, alpha=1, color=color_tclin, label="Tclin")
-        plt.scatter(x=Tchem_highlight[logFC], y=Tchem_highlight[FDR].apply(lambda x:-np.log10(x)), s=30, alpha=1, color=color_tchem, label="Tchem")
-        plt.scatter(x=Tbio_highlight[logFC],   y=Tbio_highlight[FDR].apply(lambda x:-np.log10(x)), s=30, alpha=1, color=color_tbio, label="Tbio")
-        plt.scatter(x=Tdark_highlight[logFC], y=Tdark_highlight[FDR].apply(lambda x:-np.log10(x)), s=30, alpha=1, color=color_tdark, label="Tdark")
+        plt.scatter(x=Tclin_highlight[logFC], y=Tclin_highlight[FDR].apply(lambda x:-np.log10(x)), s=20, alpha=1, color=color_tclin, label="Tclin")
+        plt.scatter(x=Tchem_highlight[logFC], y=Tchem_highlight[FDR].apply(lambda x:-np.log10(x)), s=20, alpha=1, color=color_tchem, label="Tchem")
+        plt.scatter(x=Tbio_highlight[logFC],   y=Tbio_highlight[FDR].apply(lambda x:-np.log10(x)), s=20, alpha=1, color=color_tbio, label="Tbio")
+        plt.scatter(x=Tdark_highlight[logFC], y=Tdark_highlight[FDR].apply(lambda x:-np.log10(x)), s=20, alpha=1, color=color_tdark, label="Tdark")
 
     if highlight_kinase:
         kinase_filtered = [item for item in protein_kinase_list if item in df.index]
